@@ -1,5 +1,5 @@
-lookahead_distance : 0.24 #one bakma mesafesi
-speed : 0.18 #maksimum hiz
-expansion_size : 3 #duvar genisletme katsayisi
-target_error : 0.15 #hedefe olan hata payi
-robot_r : 0.2 #lokal guvenlik icin robot mesafesi
+lookahead_distance : 0.24
+speed : 0.18 #max speed
+expansion_size : 3 #wall expansion coefficient
+target_error : 0.15 #margin of error to target
+robot_r : 0.2 #robot distance for local security

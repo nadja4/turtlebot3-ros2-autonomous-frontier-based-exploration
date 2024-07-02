@@ -260,7 +260,8 @@ def findClosestGroup(matrix,groups, current,resolution,originX,originY):
                 max_score = i
     if max_score != -1:
         targetP = paths[max_score]
-    else: #gruplar target_error*2 uzaklıktan daha yakınsa random bir noktayı hedef olarak seçer. Bu robotun bazı durumlardan kurtulmasını sağlar.
+    else: # If #groups are closer than target_error*2, it chooses a random point as a target. This allows the robot to get out of some situations.
+        print("Choose random target")
         index = random.randint(0,len(groups)-1)
         target = groups[index][1]
         target = target[random.randint(0,len(target)-1)]
@@ -305,10 +306,10 @@ def exploration(data,width,height,resolution,column,row,originX,originY):
         if len(groups) == 0: #If there is no group, the exploration is completed
             print("Empty groups")
             path = -1
-        else: #Grup varsa en yakın grubu bul
-            data[data < 0] = 1 #-0.05 olanlar bilinmeyen yer. Gidilemez olarak isaretle. 0 = gidilebilir, 1 = gidilemez.
-            path = findClosestGroup(data,groups,(row,column),resolution,originX,originY) #En yakın grubu bul
-            if path != None: #Yol varsa BSpline ile düzelt
+        else: #Find the nearest group if there is one
+            data[data < 0] = 1 #-0.05 is unknown. Mark it as not navigable. 0 = navigable, 1 = not navigable.
+            path = findClosestGroup(data,groups,(row,column),resolution,originX,originY) #Find the nearest group
+            if path != None: #Correct with BSpline if there is a path
                 path = bspline_planning(path,len(path)*5)
             else:
                 path = -1
@@ -347,7 +348,7 @@ class navigationControl(Node):
         
     def exp(self):
         twist = Twist()
-        while True: #Sensor verileri gelene kadar bekle.
+        while True: #Wait for sensor data.
             if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
                 time.sleep(0.1)
                 continue
