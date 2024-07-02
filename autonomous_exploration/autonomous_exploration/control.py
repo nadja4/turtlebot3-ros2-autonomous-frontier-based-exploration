@@ -8,8 +8,10 @@ import heapq , math , random , yaml
 import scipy.interpolate as si
 import sys , threading , time
 
+from rclpy.qos import qos_profile_sensor_data
 
-with open("src/autonomous_exploration/config/params.yaml", 'r') as file:
+
+with open("src/turtlebot3-ros2-autonomous-frontier-based-exploration/autonomous_exploration/config/params.yaml", 'r') as file:
     params = yaml.load(file, Loader=yaml.FullLoader)
 
 lookahead_distance = params["lookahead_distance"]
@@ -186,13 +188,13 @@ def dfs(matrix, i, j, group, groups):
     dfs(matrix, i - 1, j, group, groups)
     dfs(matrix, i, j + 1, group, groups)
     dfs(matrix, i, j - 1, group, groups)
-    dfs(matrix, i + 1, j + 1, group, groups) # sağ alt çapraz
-    dfs(matrix, i - 1, j - 1, group, groups) # sol üst çapraz
-    dfs(matrix, i - 1, j + 1, group, groups) # sağ üst çapraz
-    dfs(matrix, i + 1, j - 1, group, groups) # sol alt çapraz
+    dfs(matrix, i + 1, j + 1, group, groups) # lower right cross
+    dfs(matrix, i - 1, j - 1, group, groups) # upper left cross
+    dfs(matrix, i - 1, j + 1, group, groups) # upper right cross
+    dfs(matrix, i + 1, j - 1, group, groups) # lower left cross
     return group + 1
 
-def fGroups(groups):
+def sortGroups(groups):
     sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
     top_five_groups = [g for g in sorted_groups[:5] if len(g[1]) > 2]    
     return top_five_groups
@@ -278,6 +280,7 @@ def pathLength(path):
 def costmap(data,width,height,resolution):
     data = np.array(data).reshape(height,width)
     wall = np.where(data == 100)
+    # print(wall)
     for i in range(-expansion_size,expansion_size+1):
         for j in range(-expansion_size,expansion_size+1):
             if i  == 0 and j == 0:
@@ -292,13 +295,15 @@ def costmap(data,width,height,resolution):
 
 def exploration(data,width,height,resolution,column,row,originX,originY):
         global pathGlobal #Global degisken
-        data = costmap(data,width,height,resolution) #Engelleri genislet
-        data[row][column] = 0 #Robot Anlık Konum
-        data[data > 5] = 1 # 0 olanlar gidilebilir yer, 100 olanlar kesin engel
-        data = frontierB(data) #Sınır noktaları bul
-        data,groups = assign_groups(data) #Sınır noktaları gruplandır
-        groups = fGroups(groups) #Grupları küçükten büyüğe sırala. En buyuk 5 grubu al
-        if len(groups) == 0: #Grup yoksa kesif tamamlandı
+        data = costmap(data,width,height,resolution) #Expand the barriers
+        data[row][column] = 0 #Robot Current Position
+        data[data > 5] = 1 # 0 is navigable, 100 is a definite obstacle
+        data = frontierB(data) #Find boundary points
+        data,groups = assign_groups(data) #Group boundary points
+        print("Len groups: ", len(groups))
+        groups = sortGroups(groups) #Sort the groups from smallest to largest. Take the 5 largest group
+        if len(groups) == 0: #If there is no group, the exploration is completed
+            print("Empty groups")
             path = -1
         else: #Grup varsa en yakın grubu bul
             data[data < 0] = 1 #-0.05 olanlar bilinmeyen yer. Gidilemez olarak isaretle. 0 = gidilebilir, 1 = gidilemez.
@@ -313,13 +318,15 @@ def exploration(data,width,height,resolution,column,row,originX,originY):
 def localControl(scan):
     v = None
     w = None
-    for i in range(60):
+    len_scans = len(scan)
+    range_min = round(len_scans/6)
+    for i in range(range_min):
         if scan[i] < robot_r:
             v = 0.2
             w = -math.pi/4 
             break
     if v == None:
-        for i in range(300,360):
+        for i in range(range_min*5,len_scans):
             if scan[i] < robot_r:
                 v = 0.2
                 w = math.pi/4
@@ -332,11 +339,11 @@ class navigationControl(Node):
         super().__init__('Exploration')
         self.subscription = self.create_subscription(OccupancyGrid,'map',self.map_callback,10)
         self.subscription = self.create_subscription(Odometry,'odom',self.odom_callback,10)
-        self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,10)
+        self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,qos_profile_sensor_data)
         self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
-        print("[BILGI] KESİF MODU AKTİF")
-        self.kesif = True
-        threading.Thread(target=self.exp).start() #Kesif fonksiyonunu thread olarak calistirir.
+        print("Initialization done. Start Thread")
+        self.explore = True
+        threading.Thread(target=self.exp).start() #Runs the exploration function as a thread.
         
     def exp(self):
         twist = Twist()
@@ -344,7 +351,7 @@ class navigationControl(Node):
             if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
                 time.sleep(0.1)
                 continue
-            if self.kesif == True:
+            if self.explore == True:
                 if isinstance(pathGlobal, int) and pathGlobal == 0:
                     column = int((self.x - self.originX)/self.resolution)
                     row = int((self.y- self.originY)/self.resolution)
@@ -353,19 +360,19 @@ class navigationControl(Node):
                 else:
                     self.path = pathGlobal
                 if isinstance(self.path, int) and self.path == -1:
-                    print("[BILGI] KESİF TAMAMLANDI")
+                    print("Exploration completed")
                     sys.exit()
                 self.c = int((self.path[-1][0] - self.originX)/self.resolution) 
                 self.r = int((self.path[-1][1] - self.originY)/self.resolution) 
-                self.kesif = False
+                self.explore = False
                 self.i = 0
-                print("[BILGI] YENI HEDEF BELİRLENDI")
+                print("New target set")
                 t = pathLength(self.path)/speed
-                t = t - 0.2 #x = v * t formülüne göre hesaplanan sureden 0.2 saniye cikarilir. t sure sonra kesif fonksiyonu calistirilir.
-                self.t = threading.Timer(t,self.target_callback) #Hedefe az bir sure kala kesif fonksiyonunu calistirir.
+                t = t - 0.2 #Subtract 0.2 seconds from the calculated time according to the formula #x = v * t. After time t, the discovery function is run.
+                self.t = threading.Timer(t,self.target_callback) #Runs the intercept function when the target is close.
                 self.t.start()
             
-            #Rota Takip Blok Baslangic
+            #Route Following Block Start
             else:
                 v , w = localControl(self.scan)
                 if v == None:
@@ -373,23 +380,25 @@ class navigationControl(Node):
                 if(abs(self.x - self.path[-1][0]) < target_error and abs(self.y - self.path[-1][1]) < target_error):
                     v = 0.0
                     w = 0.0
-                    self.kesif = True
-                    print("[BILGI] HEDEFE ULASILDI")
-                    self.t.join() #Thread bitene kadar bekle.
+                    self.explore = True
+                    print("Target achieved")
+                    self.t.join() #Wait until #Thread is finished.
                 twist.linear.x = v
                 twist.angular.z = w
                 self.publisher.publish(twist)
                 time.sleep(0.1)
-            #Rota Takip Blok Bitis
+            #Route Following Block End
 
     def target_callback(self):
         exploration(self.data,self.width,self.height,self.resolution,self.c,self.r,self.originX,self.originY)
         
     def scan_callback(self,msg):
+        # print("Scan callback")
         self.scan_data = msg
         self.scan = msg.ranges
 
     def map_callback(self,msg):
+        # print("Map callback")
         self.map_data = msg
         self.resolution = self.map_data.info.resolution
         self.originX = self.map_data.info.origin.position.x
@@ -399,9 +408,11 @@ class navigationControl(Node):
         self.data = self.map_data.data
 
     def odom_callback(self,msg):
+        # print("Odom callback")
         self.odom_data = msg
         self.x = msg.pose.pose.position.x
         self.y = msg.pose.pose.position.y
+        # print("X: ", self.x, "\n Y: ", self.y)
         self.yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
         msg.pose.pose.orientation.z,msg.pose.pose.orientation.w)
 
