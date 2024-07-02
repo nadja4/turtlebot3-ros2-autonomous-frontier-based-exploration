@@ -1,26 +1,53 @@
-# ROS2-FrontierBaseExplorationForAutonomousRobot
-Our autonomous ground vehicle uses Frontier Based exploration to navigate and map unknown environments. Equipped with sensors, it can avoid obstacles and make real-time decisions. It has potential applications in search and rescue, agriculture, and logistics, and represents an important step forward in autonomous ground vehicle development.
+# ROS2 TurtleBot3 Frontier-based exploration for physical autonomous robot
+This repository is a fork of abdulkadrtr's [repository](https://github.com/nadja4/turtlebot3-ros2-autonomous-frontier-based-exploration), which implements a frontier based exploration for a simulated turtlebot3.
 
-This project utilizes the **Frontier-Based Exploration** algorithm for autonomous exploration. The project employs **DFS** for grouping boundary points, **A*** for finding the shortest path, **B-Spline** for smoothing path curvature, and **Pure Pursuit** for path following, along with other obstacle avoidance techniques. The combination of these techniques aims to provide a sophisticated, efficient, and reliable solution for autonomous ground vehicle exploration in a wide range of applications.
+## Installation (tested on Ubuntu 22.04 - ROS 2 Humble)
 
+Install Turtlebot3 and ROS2 Humble Packages as descripted in the Quick-Start-Guide (link below). 
 
-![Screenshot_1](https://user-images.githubusercontent.com/87595266/218670694-e53bb1c4-fff2-42e9-9b9e-62b298da7fff.png)
+When installing TurtleBot3 Packages make sure you build them from source (*not* with sudo apt ...)
 
+[Quick-Start-Guide](https://emanual.robotis.com/docs/en/platform/turtlebot3/quick-start/)
 
-# Youtube Project Presentation Video & Demo
+Don't forget to install colcon:
+```
+sudo apt install python3-colcon-common-extensions
+```
+Install Python libraries:
+```
+sudo apt install python3-pip
+pip3 install pandas
+```
+Create a ROS2 workspace:
+```
+mkdir -p ~/turtlebot3_frontier_based_ws/src
+cd ~/turtlebot3_frontier_based_ws/src
+```
+Clone the repository:
+```
+git clone <link-to-repo>
+```
+Compile packages and get dependencies:
+```
+cd ~/turtlebot3_frontier_based_ws/src
+sudo apt update && rosdep install -r --from-paths . --ignore-src --rosdistro $ROS_DISTRO -y
+```
+Build packages
+```
+cd ~/turtlebot3_frontier_based_ws/
 
-https://youtu.be/UxCZAU9ZZoc
+source /opt/ros/humble/setup.bash
 
-# Update Version V1.1 - 26.02.2023
+colcon build
+```
+Include the following lines in ~/.bashrc:
+```
+source /opt/ros/humble/local_setup.bash
+source ~/turtlebot3_frontier_based_ws/install/local_setup.bash
 
-https://youtu.be/_1vtmFuhl9Y
-
-- The exploration algorithm has been optimized.
-
-- Robot decision algorithm has been changed. Watch the video for detailed information.
-
-- Thread structure has been added to the exploration algorithm. 
-
+export TURTLEBOT3_MODEL=burger
+export ROS_DOMAIN_ID=30
+```
 
 # How does it work?
 
@@ -28,27 +55,47 @@ https://youtu.be/_1vtmFuhl9Y
 
 by running the following command:
 
-`ros2 launch slam_toolbox online_async_launch.py`
+```
+source /opt/ros/humble/setup.bash
 
-2 - Then, launch the Gazebo simulation environment by setting the TurtleBot3 
+ros2 launch slam_toolbox online_async_launch.py
+```
 
-model, for example, using the following command:
+2 - Then, launch the turtlebot bringup on the turtlebot (e.g. via SSH)
 
-`export TURTLEBOT3_MODEL=burger`
+using the following command:
 
+```
+export TURTLEBOT3_MODEL=burger
+export ROS_DOMAIN_ID=30
 
-`ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py`
+source /opt/ros/humble/setup.bash
 
-3 - Once the simulation environment is running, run the autonomous_exploration 
+ros2 launch turtlebot3_bringup robot.launch.py
+```
+
+3 - Once the turtlebot3 is running, run the autonomous_exploration 
 
 package using the following command:
 
-`ros2 run autonomous_exploration control`
+```
+source /opt/ros/humble/setup.bash
 
+source ~/turtlebot3_frontier_based_ws/install/local_setup.bash
+
+ros2 run autonomous_exploration control
+```
 This will start the robot's autonomous exploration.
+
+4 - If you want to see the progess, run the rviz visualization tool
+
+using this command: 
+```
+ros2 run rviz2 rviz2 
+```
 
 ## Requirements
 
-- ROS2 - Humble
-- Slam Toolbox
-- Turtlebot3 Package
+- [ROS2 - Humble](https://docs.ros.org/en/humble/Installation.html)
+- [Slam Toolbox](https://github.com/SteveMacenski/slam_toolbox/blob/ros2/launch/online_async_launch.py)
+- [Turtlebot3 Package](https://emanual.robotis.com/docs/en/platform/turtlebot3/quick-start/)
