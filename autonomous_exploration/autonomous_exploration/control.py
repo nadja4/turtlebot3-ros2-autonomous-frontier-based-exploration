@@ -321,17 +321,17 @@ def localControl(scan):
     w = None
     len_scans = len(scan)
     range_min = round(len_scans/6)
-    for i in range(range_min):
-        if scan[i] < robot_r:
-            v = 0.2
-            w = -math.pi/4 
-            break
+    min_forward_left_distance = min(scan[0:range_min])
+    if min_forward_left_distance < robot_r:
+        print("Robot near obstacle, move right")
+        v = 0.0
+        w = -math.pi/4 # move right
     if v == None:
-        for i in range(range_min*5,len_scans):
-            if scan[i] < robot_r:
-                v = 0.2
-                w = math.pi/4
-                break
+        min_forward_right_distance = min(scan[0:range_min])
+        if min_forward_right_distance < robot_r:
+            print("Robot near obstacle, move left")
+            v = 0.0
+            w = math.pi/4 #move left
     return v,w
 
 
