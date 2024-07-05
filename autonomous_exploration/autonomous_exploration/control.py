@@ -17,14 +17,16 @@ from rclpy.qos import qos_profile_sensor_data
 with open("src/turtlebot3-ros2-autonomous-frontier-based-exploration/autonomous_exploration/config/params.yaml", 'r') as file:
     params = yaml.load(file, Loader=yaml.FullLoader)
 
-lookahead_distance = params["lookahead_distance"]
-speed = params["speed"]
-expansion_size = params["expansion_size"]
-target_error = params["target_error"]
-robot_r = params["robot_r"]
+param_lookahead_distance = params["lookahead_distance"]
+param_speed = params["speed"]
+param_expansion_size = params["expansion_size"]
+param_target_error = params["target_error"]
+param_robot_r = params["robot_r"]
 
 pathGlobal = 0
 
+#region DataTransformation
+# Calculate euler yaw angle from x, y, z, w
 def euler_from_quaternion(x,y,z,w):
     t0 = +2.0 * (w * x + y * z)
     t1 = +1.0 - 2.0 * (x * x + y * y)
@@ -37,16 +39,17 @@ def euler_from_quaternion(x,y,z,w):
     t4 = +1.0 - 2.0 * (y * y + z * z)
     yaw_z = math.atan2(t3, t4)
     return yaw_z
+#endregion DataTransformation
 
+# Calculate the steering angle required to follow the path
 def pure_pursuit(current_x, current_y, current_heading, path, index):
-    global lookahead_distance
     closest_point = None
-    v = speed
+    v = param_speed
     for i in range(index,len(path)):
         x = path[i][0]
         y = path[i][1]
         distance = math.hypot(current_x - x, current_y - y)
-        if lookahead_distance < distance:
+        if param_lookahead_distance < distance:
             closest_point = (x, y)
             index = i
             break
@@ -65,7 +68,7 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
         sign = 1 if desired_steering_angle > 0 else -1
         desired_steering_angle = sign * math.pi/4
         v = 0.0
-    return v,desired_steering_angle,index
+    return v, desired_steering_angle, index
 
 #region MapPreparation
 
@@ -75,8 +78,8 @@ def costmap(data,width,height,resolution):
     # Get the positions of walls in the map (x-value and y-value)
     wall = np.where(data == 100)
     # Loop over the range defined by the expansion size to expand the walls
-    for i in range(-expansion_size,expansion_size+1):
-        for j in range(-expansion_size,expansion_size+1):
+    for i in range(-param_expansion_size,param_expansion_size+1):
+        for j in range(-param_expansion_size,param_expansion_size+1):
             # Skip the center position (the original wall position)
             if i  == 0 and j == 0:
                 continue
@@ -250,7 +253,7 @@ def findClosestGroup(matrix, groups, current, resolution, originX, originY):
             score.append(points_in_group/distances[i])
     # select path with the best score
     for i in range(len(distances)):
-        if distances[i] > target_error*3:
+        if distances[i] > param_target_error*3:
             if max_score_index == -1 or score[i] > score[max_score_index]:
                 max_score_index = i
     if max_score_index != -1:
@@ -293,6 +296,8 @@ def bspline_planning(array, sn):
     return path
 
 #endregion CalculateWhereToGo
+
+#region RosDebuggingTopics
 
 def publishGroups(self, data, groups, width, height, resolution, originX, originY, index):
         # print("Index group: ", index)
@@ -340,6 +345,8 @@ def PublishPath(self, path):
     
     self.publisher_path.publish(pub_path)
 
+#endregion RosDebuggingTopics
+
 def exploration(self, data,width,height,resolution,column,row,originX,originY):
         global pathGlobal
         data = costmap(data,width,height,resolution) #Expand the detected walls/borders
@@ -373,20 +380,19 @@ def localControl(scan):
     len_scans = len(scan)
     range_min = round(len_scans/6)
     min_forward_left_distance = min(scan[0:range_min])
-    if min_forward_left_distance < robot_r:
+    if min_forward_left_distance < param_robot_r:
         print("Robot near obstacle, move right")
         v = 0.05
         w = -math.pi/4 # move right
     if v == None:
         min_forward_right_distance = min(scan[0:range_min])
-        if min_forward_right_distance < robot_r:
+        if min_forward_right_distance < param_robot_r:
             print("Robot near obstacle, move left")
             v = 0.05
             w = math.pi/4 #move left
     return v,w
 
-
-class navigationControl(Node):
+class explorationControl(Node):
     def __init__(self):
         super().__init__('Exploration')
         self.subscription = self.create_subscription(OccupancyGrid,'map',self.map_callback,10)
@@ -429,7 +435,7 @@ class navigationControl(Node):
                 self.explore = False
                 self.i = 0
                 print("New target set")
-                t = pathLength(self.path)/speed
+                t = pathLength(self.path)/param_speed
                 print("Pathlength: ", pathLength(self.path), " T: ", t)
                 t = t - 0.2 #Subtract 0.2 seconds from the calculated time according to the formula #x = v * t. After time t, the discovery function is run.
                 self.t = threading.Timer(t,self.target_callback) #Runs the intercept function when the target is close.
@@ -452,7 +458,7 @@ class navigationControl(Node):
                 point.point.z = 0.0
                 self.publisher_point.publish(point) 
 
-                if(abs(self.x - self.path[-1][0]) < target_error and abs(self.y - self.path[-1][1]) < target_error):
+                if(abs(self.x - self.path[-1][0]) < param_target_error and abs(self.y - self.path[-1][1]) < param_target_error):
                     v = 0.0
                     w = 0.0
                     twist.linear.x = v
@@ -472,25 +478,13 @@ class navigationControl(Node):
     def target_callback(self):
         exploration(self, self.data,self.width,self.height,self.resolution,self.c,self.r,self.originX,self.originY)
         
+    # This function is executed when new scan data is available
     def scan_callback(self,msg):
-        # print("Scan callback")
         self.scan_data = msg
         self.scan = msg.ranges
 
-        # len_scans = len(self.scan)
-        # range_min = round(len_scans/6)
-
-        # print("range 1: ", max(self.scan[0:range_min]))
-        # print("range 2: ", max(self.scan[range_min:range_min*2]))
-        # print("range 3: ", max(self.scan[range_min*2:range_min*3]))
-        # print("range 4: ", max(self.scan[range_min*3:range_min*4]))
-        # print("range 5: ", max(self.scan[range_min*4:range_min*5]))
-        # print("range 6: ", max(self.scan[range_min*5:len_scans-1]))
-        # print("\n")
-
-
+    # This function is executed when new map data is available
     def map_callback(self,msg):
-        # print("Map callback")
         self.map_data = msg
         self.resolution = self.map_data.info.resolution
         self.originX = self.map_data.info.origin.position.x
@@ -499,12 +493,11 @@ class navigationControl(Node):
         self.height = self.map_data.info.height
         self.data = self.map_data.data
 
+    # This function is executed when new odom data is available
     def odom_callback(self,msg):
-        # print("Odom callback")
         self.odom_data = msg
         self.x = msg.pose.pose.position.x
         self.y = msg.pose.pose.position.y
-        # print("X: ", self.x, "\n Y: ", self.y)
         self.yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
         msg.pose.pose.orientation.z,msg.pose.pose.orientation.w)
 
@@ -522,9 +515,9 @@ def main(args=None):
     signal.signal(signal.SIGINT, signal_handler)
 
     rclpy.init(args=args)
-    navigation_control = navigationControl()
-    rclpy.spin(navigation_control)
-    navigation_control.destroy_node()
+    exploration_control = explorationControl()
+    rclpy.spin(exploration_control)
+    exploration_control.destroy_node()
     rclpy.shutdown()
 
 if __name__ == '__main__':
