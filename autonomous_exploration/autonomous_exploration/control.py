@@ -47,11 +47,11 @@ def prepare_map_and_get_groups(map_data, row, column):
     data[row][column] = 0 #Robot Current Position
     data[data > 5] = 1 # 0 is navigable, 100 is a definite obstacle
 
-    data = markFrontiers(data) #Find boundary points
+    data = mark_frontiers(data) #Find boundary points
 
     groups = assign_groups(data) #Group boundary points
     
-    groups = sortGroups(groups) #Sort the groups from smallest to largest. Take the 5 largest groups
+    groups = sort_groups(groups) #Sort the groups from smallest to largest. Take the 5 largest groups
     
     data[data < 0] = 1 #-0.05 is unknown. Mark it as not navigable. 0 = navigable, 1 = not navigable.
 
@@ -80,7 +80,7 @@ def costmap(data, width, height, resolution):
     data = data*resolution
     return data
 
-def markFrontiers(matrix):
+def mark_frontiers(matrix):
     # Search for frontier areas between already explored and navigable (value 0) and not yet explored (value < 0) areas on the map. Mark the pixels in this area with the value 2. 
     for i in range(len(matrix)):
         for j in range(len(matrix[i])):
@@ -127,7 +127,7 @@ def assign_groups(matrix):
                 group = dfs(matrix, i, j, group, groups)
     return groups
 
-def sortGroups(groups):
+def sort_groups(groups):
     sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
     top_five_groups = [g for g in sorted_groups[:5] if len(g[1]) > 2]    
     return top_five_groups
@@ -206,7 +206,7 @@ def astar(array, start, goal):
             return data
     return False
 
-def pathLength(path):
+def get_path_length(path):
     for i in range(len(path)):
         path[i] = (path[i][0],path[i][1])
         points = np.array(path)
@@ -215,8 +215,8 @@ def pathLength(path):
     total_distance = np.sum(distances)
     return total_distance
 
-def findClosestGroup(matrix, groups, current, resolution, originX, originY):
-    print("Number of groups after sortGroups:", len(groups))
+def find_closest_group(matrix, groups, current, resolution, originX, originY):
+    # print("Number of groups after sortGroups:", len(groups)) # debug proposes
     targetP = None
     distances = []
     paths = []
@@ -227,7 +227,7 @@ def findClosestGroup(matrix, groups, current, resolution, originX, originY):
         # Calculate path to centroid/middle of the group
         path = astar(matrix, current, middle)
         path = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
-        total_distance = pathLength(path)
+        total_distance = get_path_length(path)
         distances.append(total_distance)
         paths.append(path)
     # score calculated paths to centroids
@@ -317,18 +317,18 @@ def handle_obstacles(self):
     obstacle_detected = False
     if self.forward_distance < param_robot_r:
         print("Obstacle in front detected, move backwards")
-        while self.forward_distance <+ param_robot_r + 0.1:
+        while self.forward_distance <+ param_robot_r*2:
             publish_cmd_vel(self, -0.02, 0.0)
             obstacle_detected = True
     if self.left_forward_distance < param_robot_r:
-        print("Obstacle left detected, move right")
-        while self.left_forward_distance <= param_robot_r + 0.1:
-            publish_cmd_vel(self, 0.0, -0.2)
+        print("Obstacle front left detected, move forward slowl and turn right")
+        while self.left_forward_distance <= param_robot_r*2:
+            publish_cmd_vel(self, 0.02, -0.2)
             obstacle_detected = True
     if self.right_forward_distance < param_robot_r:
-        print("Obstacle right detected, move left")
-        while self.right_forward_distance <= param_robot_r + 0.1:
-            publish_cmd_vel(self, 0.0, 0.2)
+        print("Obstacle front right detected, move forward slowly and turn left")
+        while self.right_forward_distance <= param_robot_r*2:
+            publish_cmd_vel(self, 0.02, 0.2)
             obstacle_detected = True
     return obstacle_detected
 
@@ -342,7 +342,7 @@ def publish_cmd_vel(self, v, w):
 
     self.publisher.publish(twist)
 
-def publishGroups(self, data, groups, width, height, resolution, originX, originY, index):
+def publish_groups(self, data, groups, width, height, resolution, originX, originY, index):
         map_msg = OccupancyGrid()
         map_msg.header = Header()
         map_msg.header.stamp = self.get_clock().now().to_msg()
@@ -362,14 +362,14 @@ def publishGroups(self, data, groups, width, height, resolution, originX, origin
             if i == index:
                 color = 100
             else:
-                color = 20
+                color = 20 * i
             for a in range(len(values)):
                 send_data[values[a][0]][values[a][1]] = color
 
         map_msg.data = send_data.astype(int).flatten().tolist()
         self.publisher_map.publish(map_msg)
 
-def PublishPath(self, path):
+def publish_path(self, path):
     pub_path = Path()
     pub_path.header = Header()
     pub_path.header.stamp = self.get_clock().now().to_msg()
@@ -385,7 +385,7 @@ def PublishPath(self, path):
     
     self.publisher_path.publish(pub_path)
 
-def PublishTargetPoint(self, path):    
+def publish_target_point(self, path):    
     point = PointStamped()
     point.header.stamp = self.get_clock().now().to_msg()
     point.header.frame_id = "map" 
@@ -428,6 +428,7 @@ class explorationControl(Node):
                     running_state = 1
             # Prepare map
             elif running_state == 1:
+                print("Search for next target...")
                 # Data received, start exploration
                 row = int((self.y- self.originY)/self.resolution)
                 column = int((self.x - self.originX)/self.resolution)
@@ -437,24 +438,23 @@ class explorationControl(Node):
                     running_state = 2
                 else:
                     # no groups left, end exploration
+                    print("No groups with more than 2 points found.")
                     running_state = 4
             # Choose target, plan path
             elif running_state == 2:
                 # choose group and calculate path
-                path, index = findClosestGroup(data, groups, (row,column), self.resolution, self.originX, self.originY) #Find the nearest group
+                # Find the nearest group
+                path, index = find_closest_group(data, groups, (row,column), self.resolution, self.originX, self.originY) 
                 if path != None:
-                    # print("Path found, smooth it with bspline planner")
-
-                    # print(groups)
-                    
-                    publishGroups(self, data, groups, self.width, self.height, self.resolution, self.originX, self.originY, index)
+                    # Path calculated, smooth it with bspline planner
+                    publish_target_point(self, path)
+                  
+                    publish_groups(self, data, groups, self.width, self.height, self.resolution, self.originX, self.originY, index)
                     
                     path = bspline_planning(path,len(path)*5)
                     
-                    PublishPath(self, path)
+                    publish_path(self, path)
 
-                    PublishTargetPoint(self, path)
-                    
                     self.i = 0
                     running_state = 3
                 else:
@@ -499,11 +499,8 @@ class explorationControl(Node):
     
         forward_distance = msg.ranges[0:increment] + msg.ranges[increment*15:]
         self.forward_distance = min(forward_distance)
-        self.left_forward_distance = min(msg.ranges[increment:increment*3])
-        self.right_forward_distance = min(msg.ranges[increment*13:increment*15])
-
-        self.left_distance = min(msg.ranges[increment*3:increment*5])
-        self.right_distance = min(msg.ranges[increment*11:increment*13])
+        self.left_forward_distance = min(msg.ranges[increment:increment*4])
+        self.right_forward_distance = min(msg.ranges[increment*12:increment*15])
 
     # This function is executed when new map data is available
     def map_callback(self,msg):
