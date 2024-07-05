@@ -421,36 +421,39 @@ def prepare_map_and_get_groups(map_data, row, column):
 
     return data, groups
 
-def check_scan_for_obstacles(forward_distance, left_forward_distance, left_distance, right_forward_distance, right_distance):
-    # if there is a wall in front, dont go forward
-    if forward_distance < param_robot_r:  
-        return False
-    else:
-        # if theres no wall close to the sides, go forward
-        if (right_forward_distance > param_robot_r and
-                left_forward_distance > param_robot_r):  
-            return True
-        else:
-            # if the robot is aiming away from the wall, go forward
-            if (left_forward_distance > left_distance or right_forward_distance > right_distance):
-                return True
-            else:
-                return False
+def handle_obstacles(self):
+    obstacle_detected = False
+    if self.forward_distance < param_robot_r:
+        print("Obstacle in front detected, move backwards")
+        while self.forward_distance <+ param_robot_r + 0.1:
+            publish_cmd_vel(self, -0.02, 0.0)
+            obstacle_detected = True
+    if self.left_forward_distance < param_robot_r:
+        print("Obstacle left detected, move right")
+        while self.left_forward_distance <= param_robot_r + 0.1:
+            publish_cmd_vel(self, 0.0, -0.2)
+            obstacle_detected = True
+    if self.right_forward_distance < param_robot_r:
+        print("Obstacle right detected, move left")
+        while self.right_forward_distance <= param_robot_r + 0.1:
+            publish_cmd_vel(self, 0.0, 0.2)
+            obstacle_detected = True
+    return obstacle_detected
 
-def turn_around_one_time(self):
-    self.yaw = round(self.yaw,5)
-    start_yaw = self.yaw
+# def turn_around_one_time(self):
+#     self.yaw = round(self.yaw,5)
+#     start_yaw = self.yaw
     
-    publish_cmd_vel(self, 0.0, math.pi/4)
+#     publish_cmd_vel(self, 0.0, math.pi/4)
 
-    while abs(start_yaw - self.yaw) <= 0.2:
-        # wait until turtlebot starts turning
-        time.sleep(0.01)
-    while abs(start_yaw - self.yaw) > 0.2:
-        # wait until turtlebot turned around 360 degree
-        time.sleep(0.01)
+#     while abs(start_yaw - self.yaw) <= 0.2:
+#         # wait until turtlebot starts turning
+#         time.sleep(0.01)
+#     while abs(start_yaw - self.yaw) > 0.2:
+#         # wait until turtlebot turned around 360 degree
+#         time.sleep(0.01)
     
-    publish_cmd_vel(self, 0.0, 0.0)
+#     publish_cmd_vel(self, 0.0, 0.0)
 
 class explorationControl(Node):
     def __init__(self):
@@ -540,7 +543,7 @@ class explorationControl(Node):
                     time.sleep(0.5)
                     continue
                 else:
-                    turn_around_one_time(self)
+                    # turn_around_one_time(self)
                     running_state = 1
             elif running_state == 1:
                 # Data received, start exploration
@@ -557,7 +560,7 @@ class explorationControl(Node):
                 # choose group and calculate path
                 path, index = findClosestGroup(data, groups, (row,column), self.resolution, self.originX, self.originY) #Find the nearest group
                 if path != None:
-                    print("Path found, smooth it with bspline planner")
+                    # print("Path found, smooth it with bspline planner")
                     
                     publishGroups(self, data, groups, self.width, self.height, self.resolution, self.originX, self.originY, index)
                     
@@ -573,12 +576,17 @@ class explorationControl(Node):
                     print("No path found.")
                     running_state = 4
             elif running_state == 3:
-                obstacle_detected = check_scan_for_obstacles(self.forward_distance, self.left_forward_distance, self.left_distance, self.right_forward_distance, self.right_distance)
+                obstacle_detected = handle_obstacles(self)
                 distance_to_target_x = abs(self.x - path[-1][0]) 
                 distance_to_target_y = abs(self.y - path[-1][1])
-                print(distance_to_target_x, distance_to_target_y)
-                if obstacle_detected or (distance_to_target_x < param_target_error and distance_to_target_y < param_target_error):
-                    print("Obstacle or target reached")
+                if obstacle_detected:    
+                    v = 0.0
+                    w = 0.0
+                    running_state = 1
+                # if robot near target
+                elif (distance_to_target_x < param_target_error and distance_to_target_y < param_target_error):
+                    print("Target reached")
+                    print(distance_to_target_x, distance_to_target_y)
                     v = 0.0
                     w = 0.0
                     running_state = 1
@@ -599,17 +607,18 @@ class explorationControl(Node):
         self.scan_data = msg
         self.scan = msg.ranges
 
-        number_of_values = len(self.scan)
-        recalc_increment = round(number_of_values / 4)
-    
-        self.forward_distance = msg.ranges[0]
-        self.left_distance = msg.ranges[recalc_increment]
-        self.back_distance = msg.ranges[recalc_increment * 2]
-        self.right_distance = msg.ranges[recalc_increment * 3]
+        np.nan_to_num(self.scan, nan=param_robot_r+0.1)
 
-        increment_detailed = round(recalc_increment / 4)
-        self.left_forward_distance = msg.ranges[increment_detailed]
-        self.right_forward_distance = msg.ranges[increment_detailed * 7]
+        number_of_values = len(self.scan)
+        increment = round(number_of_values / 16)
+    
+        forward_distance = msg.ranges[0:increment] + msg.ranges[increment*15:]
+        self.forward_distance = min(forward_distance)
+        self.left_forward_distance = min(msg.ranges[increment:increment*3])
+        self.right_forward_distance = min(msg.ranges[increment*13:increment*15])
+
+        self.left_distance = min(msg.ranges[increment*3:increment*5])
+        self.right_distance = min(msg.ranges[increment*11:increment*13])
 
     # This function is executed when new map data is available
     def map_callback(self,msg):
