@@ -48,9 +48,9 @@ def generate_launch_description():
     slam_toolbox_launchfile_dir = os.path.join(get_package_share_directory('slam_toolbox'), 'launch')
 
     rviz_config_dir = os.path.join(
-        get_package_share_directory('nav2_bringup'),
+        get_package_share_directory('autonomous_exploration'),
         'rviz',
-        'nav2_default_view.rviz')
+        'exploration_default_view.rviz')
 
     return LaunchDescription([
         #DeclareLaunchArgument(
