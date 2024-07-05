@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid , Odometry
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PointStamped
 from sensor_msgs.msg import LaserScan
 import numpy as np
 import heapq , math , random , yaml
@@ -311,7 +311,7 @@ def exploration(data,width,height,resolution,column,row,originX,originY):
             path = findClosestGroup(data,groups,(row,column),resolution,originX,originY) #Find the nearest group
             if path != None: #Correct with BSpline if there is a path
                 path = bspline_planning(path,len(path)*5)
-            else:
+            else: # path == None
                 path = -1
         pathGlobal = path
         return
@@ -342,17 +342,21 @@ class navigationControl(Node):
         self.subscription = self.create_subscription(Odometry,'odom',self.odom_callback,10)
         self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,qos_profile_sensor_data)
         self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.publisher_point = self.create_publisher(PointStamped, '/point_topic', 10)
         print("Initialization done. Start Thread")
         self.explore = True
+        # Needs thread because of While True (rclpy.spin)
         threading.Thread(target=self.exp).start() #Runs the exploration function as a thread.
         
     def exp(self):
         twist = Twist()
         while True: #Wait for sensor data.
             if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
+                print("Wait for data")
                 time.sleep(0.1)
                 continue
             if self.explore == True:
+                # is pathGlobal of type int (!= none) and 0?
                 if isinstance(pathGlobal, int) and pathGlobal == 0:
                     column = int((self.x - self.originX)/self.resolution)
                     row = int((self.y- self.originY)/self.resolution)
@@ -360,6 +364,7 @@ class navigationControl(Node):
                     self.path = pathGlobal
                 else:
                     self.path = pathGlobal
+                # is path of type int and not -1?
                 if isinstance(self.path, int) and self.path == -1:
                     print("Exploration completed")
                     sys.exit()
@@ -369,6 +374,7 @@ class navigationControl(Node):
                 self.i = 0
                 print("New target set")
                 t = pathLength(self.path)/speed
+                print("Pathlength: ", pathLength(self.path), " T: ", t)
                 t = t - 0.2 #Subtract 0.2 seconds from the calculated time according to the formula #x = v * t. After time t, the discovery function is run.
                 self.t = threading.Timer(t,self.target_callback) #Runs the intercept function when the target is close.
                 self.t.start()
@@ -378,12 +384,28 @@ class navigationControl(Node):
                 v , w = localControl(self.scan)
                 if v == None:
                     v, w,self.i = pure_pursuit(self.x,self.y,self.yaw,self.path,self.i)
+                
+                # Publish point 
+
+                point = PointStamped()
+                point.header.stamp = self.get_clock().now().to_msg()
+                point.header.frame_id = "map"  # Beispiel-Rahmen-ID
+                point.point.x = self.path[-1][0]
+                point.point.y = self.path[-1][1]
+                point.point.z = 0.0
+                self.publisher_point.publish(point) 
+
                 if(abs(self.x - self.path[-1][0]) < target_error and abs(self.y - self.path[-1][1]) < target_error):
                     v = 0.0
                     w = 0.0
+                    twist.linear.x = v
+                    twist.angular.z = w
+                    print("Speed 0")
+                    self.publisher.publish(twist)
                     self.explore = True
-                    print("Target achieved")
+                    print("Target achieved, wait for thread")
                     self.t.join() #Wait until #Thread is finished.
+                    print("Thread finished")
                 twist.linear.x = v
                 twist.angular.z = w
                 self.publisher.publish(twist)
