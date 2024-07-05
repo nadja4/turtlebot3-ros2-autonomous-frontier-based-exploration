@@ -8,6 +8,8 @@ import numpy as np
 import heapq , math , random , yaml
 import scipy.interpolate as si
 import sys , threading , time
+import signal
+import subprocess
 
 from rclpy.qos import qos_profile_sensor_data
 
@@ -398,7 +400,9 @@ class navigationControl(Node):
         print("Initialization done. Start Thread")
         self.explore = True
         # Needs thread because of While True (rclpy.spin)
-        threading.Thread(target=self.exp).start() #Runs the exploration function as a thread.
+        t = threading.Thread(target=self.exp)
+        t.daemon = True # End thread if main thread is stopped
+        t.start() #Runs the exploration function as a thread.
         
     def exp(self):
         twist = Twist()
@@ -504,7 +508,19 @@ class navigationControl(Node):
         self.yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
         msg.pose.pose.orientation.z,msg.pose.pose.orientation.w)
 
+def signal_handler(signal, frame):
+    print("\n \n######\n\nExiting started... Turtlebot will be stopped as soon as possible, be patient!\n\n#####\n \n")
+
+    command = ["ros2", "topic", "pub", "--once", "/cmd_vel", "geometry_msgs/msg/Twist", "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    print("Exited.")
+    sys.exit(0)
+
 def main(args=None):
+    signal.signal(signal.SIGINT, signal_handler)
+
     rclpy.init(args=args)
     navigation_control = navigationControl()
     rclpy.spin(navigation_control)
