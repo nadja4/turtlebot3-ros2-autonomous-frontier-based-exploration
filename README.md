@@ -51,14 +51,14 @@ export ROS_DOMAIN_ID=30
 
 # How does it work?
 
-1 - To get started with autonomous exploration, first launch the Map Node 
+1 - To get started with autonomous exploration, first launch a bringup 
 
 by running the following command:
 
 ```
 source /opt/ros/humble/setup.bash
 
-ros2 launch slam_toolbox online_async_launch.py
+ros2 launch autonomous_exploration autonomous_exploration.launch.py
 ```
 
 2 - Then, launch the turtlebot bringup on the turtlebot (e.g. via SSH)
@@ -86,13 +86,6 @@ source ~/turtlebot3_frontier_based_ws/install/local_setup.bash
 ros2 run autonomous_exploration control
 ```
 This will start the robot's autonomous exploration.
-
-4 - If you want to see the progess, run the rviz visualization tool
-
-using this command: 
-```
-ros2 run rviz2 rviz2 
-```
 
 ## Requirements
 
