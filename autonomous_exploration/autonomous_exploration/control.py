@@ -39,36 +39,23 @@ def euler_from_quaternion(x,y,z,w):
     return yaw_z
 #endregion DataTransformation
 
-# Calculate the steering angle required to follow the path
-def pure_pursuit(current_x, current_y, current_heading, path, index):
-    closest_point = None
-    v = param_speed
-    for i in range(index,len(path)):
-        x = path[i][0]
-        y = path[i][1]
-        distance = math.hypot(current_x - x, current_y - y)
-        if param_lookahead_distance < distance:
-            closest_point = (x, y)
-            index = i
-            break
-    if closest_point is not None:
-        target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
-        desired_steering_angle = target_heading - current_heading
-    else:
-        target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
-        desired_steering_angle = target_heading - current_heading
-        index = len(path)-1
-    if desired_steering_angle > math.pi:
-        desired_steering_angle -= 2 * math.pi
-    elif desired_steering_angle < -math.pi:
-        desired_steering_angle += 2 * math.pi
-    if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
-        sign = 1 if desired_steering_angle > 0 else -1
-        desired_steering_angle = sign * math.pi/4
-        v = 0.0
-    return v, desired_steering_angle, index
-
 #region MapPreparation
+def prepare_map_and_get_groups(map_data, row, column):
+    #Expand the detected walls/borders
+    data = costmap(map_data.data, map_data.info.width, map_data.info.height, map_data.info.resolution)
+
+    data[row][column] = 0 #Robot Current Position
+    data[data > 5] = 1 # 0 is navigable, 100 is a definite obstacle
+
+    data = markFrontiers(data) #Find boundary points
+
+    groups = assign_groups(data) #Group boundary points
+    
+    groups = sortGroups(groups) #Sort the groups from smallest to largest. Take the 5 largest groups
+    
+    data[data < 0] = 1 #-0.05 is unknown. Mark it as not navigable. 0 = navigable, 1 = not navigable.
+
+    return data, groups
 
 def costmap(data, width, height, resolution):
      # Reshape 1D data array into 2D array, based on height and width of map
@@ -296,6 +283,57 @@ def bspline_planning(array, sn):
 
 #endregion CalculateWhereToGo
 
+#region Navigation
+# Calculate the steering angle required to follow the path
+def pure_pursuit(current_x, current_y, current_heading, path, index):
+    closest_point = None
+    v = param_speed
+    for i in range(index,len(path)):
+        x = path[i][0]
+        y = path[i][1]
+        distance = math.hypot(current_x - x, current_y - y)
+        if param_lookahead_distance < distance:
+            closest_point = (x, y)
+            index = i
+            break
+    if closest_point is not None:
+        target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
+        desired_steering_angle = target_heading - current_heading
+    else:
+        target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
+        desired_steering_angle = target_heading - current_heading
+        index = len(path)-1
+    if desired_steering_angle > math.pi:
+        desired_steering_angle -= 2 * math.pi
+    elif desired_steering_angle < -math.pi:
+        desired_steering_angle += 2 * math.pi
+    if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
+        sign = 1 if desired_steering_angle > 0 else -1
+        desired_steering_angle = sign * math.pi/4
+        v = 0.0
+    return v, desired_steering_angle, index
+
+def handle_obstacles(self):
+    obstacle_detected = False
+    if self.forward_distance < param_robot_r:
+        print("Obstacle in front detected, move backwards")
+        while self.forward_distance <+ param_robot_r + 0.1:
+            publish_cmd_vel(self, -0.02, 0.0)
+            obstacle_detected = True
+    if self.left_forward_distance < param_robot_r:
+        print("Obstacle left detected, move right")
+        while self.left_forward_distance <= param_robot_r + 0.1:
+            publish_cmd_vel(self, 0.0, -0.2)
+            obstacle_detected = True
+    if self.right_forward_distance < param_robot_r:
+        print("Obstacle right detected, move left")
+        while self.right_forward_distance <= param_robot_r + 0.1:
+            publish_cmd_vel(self, 0.0, 0.2)
+            obstacle_detected = True
+    return obstacle_detected
+
+#endregion Navigation
+
 #region RosDebuggingTopics
 def publish_cmd_vel(self, v, w):
     twist = Twist()
@@ -358,102 +396,6 @@ def PublishTargetPoint(self, path):
 
 #endregion RosDebuggingTopics
 
-def exploration(self, data,width,height,resolution,column,row,originX,originY):
-        global pathGlobal
-        data = costmap(data,width,height,resolution) #Expand the detected walls/borders
-        data[row][column] = 0 #Robot Current Position
-        data[data > 5] = 1 # 0 is navigable, 100 is a definite obstacle
-        data = markFrontiers(data) #Find boundary points
-        data, groups = assign_groups(data) #Group boundary points
-        print("Len groups: ", len(groups))
-        groups = sortGroups(groups) #Sort the groups from smallest to largest. Take the 5 largest groups
-        if len(groups) == 0: #If there is no group, the exploration is completed
-            print("No groups left")
-            path = -1
-        else: #Find the nearest group if there is one
-            data[data < 0] = 1 #-0.05 is unknown. Mark it as not navigable. 0 = navigable, 1 = not navigable.
-            path, index = findClosestGroup(data,groups,(row,column),resolution,originX,originY) #Find the nearest group
-            if path != None: #Correct with BSpline if there is a path
-                print("Target point before: ", path[-1][0], path[-1][1])
-                path = bspline_planning(path,len(path)*5)
-                print("Target point after bspline: ", path[-1][0], path[-1][1])
-            else: # path == None
-                path = -1
-
-            publishGroups(self, data, groups, width, height, resolution, originX, originY, index)
-
-        pathGlobal = path
-        return
-
-def localControl(scan):
-    v = None
-    w = None
-    len_scans = len(scan)
-    range_min = round(len_scans/6)
-    min_forward_left_distance = min(scan[0:range_min])
-    if min_forward_left_distance < param_robot_r:
-        print("Robot near obstacle, move right")
-        v = 0.05
-        w = -math.pi/4 # move right
-    if v == None:
-        min_forward_right_distance = min(scan[0:range_min])
-        if min_forward_right_distance < param_robot_r:
-            print("Robot near obstacle, move left")
-            v = 0.05
-            w = math.pi/4 #move left
-    return v,w
-
-def prepare_map_and_get_groups(map_data, row, column):
-    #Expand the detected walls/borders
-    data = costmap(map_data.data, map_data.info.width, map_data.info.height, map_data.info.resolution)
-
-    data[row][column] = 0 #Robot Current Position
-    data[data > 5] = 1 # 0 is navigable, 100 is a definite obstacle
-
-    data = markFrontiers(data) #Find boundary points
-
-    groups = assign_groups(data) #Group boundary points
-    
-    groups = sortGroups(groups) #Sort the groups from smallest to largest. Take the 5 largest groups
-    
-    data[data < 0] = 1 #-0.05 is unknown. Mark it as not navigable. 0 = navigable, 1 = not navigable.
-
-    return data, groups
-
-def handle_obstacles(self):
-    obstacle_detected = False
-    if self.forward_distance < param_robot_r:
-        print("Obstacle in front detected, move backwards")
-        while self.forward_distance <+ param_robot_r + 0.1:
-            publish_cmd_vel(self, -0.02, 0.0)
-            obstacle_detected = True
-    if self.left_forward_distance < param_robot_r:
-        print("Obstacle left detected, move right")
-        while self.left_forward_distance <= param_robot_r + 0.1:
-            publish_cmd_vel(self, 0.0, -0.2)
-            obstacle_detected = True
-    if self.right_forward_distance < param_robot_r:
-        print("Obstacle right detected, move left")
-        while self.right_forward_distance <= param_robot_r + 0.1:
-            publish_cmd_vel(self, 0.0, 0.2)
-            obstacle_detected = True
-    return obstacle_detected
-
-# def turn_around_one_time(self):
-#     self.yaw = round(self.yaw,5)
-#     start_yaw = self.yaw
-    
-#     publish_cmd_vel(self, 0.0, math.pi/4)
-
-#     while abs(start_yaw - self.yaw) <= 0.2:
-#         # wait until turtlebot starts turning
-#         time.sleep(0.01)
-#     while abs(start_yaw - self.yaw) > 0.2:
-#         # wait until turtlebot turned around 360 degree
-#         time.sleep(0.01)
-    
-#     publish_cmd_vel(self, 0.0, 0.0)
-
 class explorationControl(Node):
     def __init__(self):
         super().__init__('Exploration')
@@ -466,75 +408,16 @@ class explorationControl(Node):
         self.publisher_path = self.create_publisher(Path, '/path_topic', 10)
 
         print("Initialization done. Start Thread")
-        self.explore = True
-        # Needs thread because of While True (rclpy.spin)
+        # Needs thread because of While True and rclpy.spin in main
         t = threading.Thread(target=self.run_exploration)
         t.daemon = True # End thread if main thread is stopped
         t.start() #Runs the exploration function as a thread.
-        
-    def exp(self):
-        twist = Twist()
-        while True: #Wait for sensor data.
-            if self.explore == True:
-                # is pathGlobal of type int (!= none) and 0?
-                if isinstance(pathGlobal, int) and pathGlobal == 0:
-                    column = int((self.x - self.originX)/self.resolution)
-                    row = int((self.y- self.originY)/self.resolution)
-                    exploration(self, self.data,self.width,self.height,self.resolution,column,row,self.originX,self.originY)
-                    self.path = pathGlobal
-                else:
-                    self.path = pathGlobal
-                # is path of type int and not -1?
-                if isinstance(self.path, int) and self.path == -1:
-                    print("Exploration completed")
-                    sys.exit()
-                self.explore = False
-                self.i = 0
-                print("New target set")
-                t = pathLength(self.path)/param_speed
-                print("Pathlength: ", pathLength(self.path), " T: ", t)
-                t = t - 0.2 #Subtract 0.2 seconds from the calculated time according to the formula #x = v * t. After time t, the discovery function is run.
-                self.t = threading.Timer(t,self.target_callback) #Runs the intercept function when the target is close.
-                self.t.start()
-            
-            #Route Following Block Start
-            else:
-                v , w = localControl(self.scan)
-                if v == None:
-                    v, w,self.i = pure_pursuit(self.x,self.y,self.yaw,self.path,self.i)
-                
-                PublishPath(self, self.path)
-
-                # Publish point 
-                point = PointStamped()
-                point.header.stamp = self.get_clock().now().to_msg()
-                point.header.frame_id = "map"  # Beispiel-Rahmen-ID
-                point.point.x = self.path[-1][0]
-                point.point.y = self.path[-1][1]
-                point.point.z = 0.0
-                self.publisher_point.publish(point) 
-
-                if(abs(self.x - self.path[-1][0]) < param_target_error and abs(self.y - self.path[-1][1]) < param_target_error):
-                    v = 0.0
-                    w = 0.0
-                    twist.linear.x = v
-                    twist.angular.z = w
-                    print("Speed 0")
-                    self.publisher.publish(twist)
-                    self.explore = True
-                    print("Target achieved, wait for thread")
-                    self.t.join() #Wait until #Thread is finished.
-                    print("Thread finished")
-                twist.linear.x = v
-                twist.angular.z = w
-                self.publisher.publish(twist)
-                time.sleep(0.1)
-            #Route Following Block End
 
     def run_exploration(self):
         # Init        
         running_state = 0
         while True:
+            # Wait for data
             if running_state == 0: 
                 # Wait until data from subscribed topics is available
                 if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
@@ -542,8 +425,8 @@ class explorationControl(Node):
                     time.sleep(0.5)
                     continue
                 else:
-                    # turn_around_one_time(self)
                     running_state = 1
+            # Prepare map
             elif running_state == 1:
                 # Data received, start exploration
                 row = int((self.y- self.originY)/self.resolution)
@@ -555,11 +438,14 @@ class explorationControl(Node):
                 else:
                     # no groups left, end exploration
                     running_state = 4
+            # Choose target, plan path
             elif running_state == 2:
                 # choose group and calculate path
                 path, index = findClosestGroup(data, groups, (row,column), self.resolution, self.originX, self.originY) #Find the nearest group
                 if path != None:
                     # print("Path found, smooth it with bspline planner")
+
+                    # print(groups)
                     
                     publishGroups(self, data, groups, self.width, self.height, self.resolution, self.originX, self.originY, index)
                     
@@ -574,6 +460,7 @@ class explorationControl(Node):
                 else:
                     print("No path found.")
                     running_state = 4
+            # Navigate to target
             elif running_state == 3:
                 obstacle_detected = handle_obstacles(self)
                 distance_to_target_x = abs(self.x - path[-1][0]) 
@@ -585,7 +472,6 @@ class explorationControl(Node):
                 # if robot near target
                 elif (distance_to_target_x < param_target_error and distance_to_target_y < param_target_error):
                     print("Target reached")
-                    print(distance_to_target_x, distance_to_target_y)
                     v = 0.0
                     w = 0.0
                     running_state = 1
@@ -593,7 +479,7 @@ class explorationControl(Node):
                     v, w, self.i = pure_pursuit(self.x,self.y,self.yaw, path,self.i)
 
                 publish_cmd_vel(self, v, w)
-            
+            # Exit
             elif running_state == 4:
                 print("Exploration finished")
                 sys.exit()
