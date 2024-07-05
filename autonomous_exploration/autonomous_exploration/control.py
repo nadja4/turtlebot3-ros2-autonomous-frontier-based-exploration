@@ -23,8 +23,6 @@ param_expansion_size = params["expansion_size"]
 param_target_error = params["target_error"]
 param_robot_r = params["robot_r"]
 
-pathGlobal = 0
-
 #region DataTransformation
 # Calculate euler yaw angle from x, y, z, w
 def euler_from_quaternion(x,y,z,w):
@@ -72,14 +70,14 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
 
 #region MapPreparation
 
-def costmap(data,width,height,resolution):
+def costmap(data, width, height, resolution):
      # Reshape 1D data array into 2D array, based on height and width of map
-    data = np.array(data).reshape(height,width)
+    data = np.array(data).reshape(height, width)
     # Get the positions of walls in the map (x-value and y-value)
     wall = np.where(data == 100)
     # Loop over the range defined by the expansion size to expand the walls
-    for i in range(-param_expansion_size,param_expansion_size+1):
-        for j in range(-param_expansion_size,param_expansion_size+1):
+    for i in range(-param_expansion_size, param_expansion_size+1):
+        for j in range(-param_expansion_size, param_expansion_size+1):
             # Skip the center position (the original wall position)
             if i  == 0 and j == 0:
                 continue
@@ -140,7 +138,7 @@ def assign_groups(matrix):
              # Check if current cell is marked as frontier
             if matrix[i][j] == 2: 
                 group = dfs(matrix, i, j, group, groups)
-    return matrix, groups
+    return groups
 
 def sortGroups(groups):
     sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
@@ -231,6 +229,7 @@ def pathLength(path):
     return total_distance
 
 def findClosestGroup(matrix, groups, current, resolution, originX, originY):
+    print(len(groups))
     targetP = None
     distances = []
     paths = []
@@ -253,7 +252,8 @@ def findClosestGroup(matrix, groups, current, resolution, originX, originY):
             score.append(points_in_group/distances[i])
     # select path with the best score
     for i in range(len(distances)):
-        if distances[i] > param_target_error*3:
+        print(distances[i])
+        if distances[i] > param_target_error*2:
             if max_score_index == -1 or score[i] > score[max_score_index]:
                 max_score_index = i
     if max_score_index != -1:
@@ -298,11 +298,14 @@ def bspline_planning(array, sn):
 #endregion CalculateWhereToGo
 
 #region RosDebuggingTopics
+def publish_cmd_vel(self, v, w):
+    twist = Twist()
+    twist.linear.x = v
+    twist.angular.z = w
+
+    self.publisher.publish(twist)
 
 def publishGroups(self, data, groups, width, height, resolution, originX, originY, index):
-        # print("Index group: ", index)
-        # print(groups)
-
         map_msg = OccupancyGrid()
         map_msg.header = Header()
         map_msg.header.stamp = self.get_clock().now().to_msg()
@@ -344,6 +347,15 @@ def PublishPath(self, path):
         pub_path.poses.append(pose)
     
     self.publisher_path.publish(pub_path)
+
+def PublishTargetPoint(self, path):    
+    point = PointStamped()
+    point.header.stamp = self.get_clock().now().to_msg()
+    point.header.frame_id = "map" 
+    point.point.x = path[-1][0]
+    point.point.y = path[-1][1]
+    point.point.z = 0.0
+    self.publisher_point.publish(point) 
 
 #endregion RosDebuggingTopics
 
@@ -392,6 +404,54 @@ def localControl(scan):
             w = math.pi/4 #move left
     return v,w
 
+def prepare_map_and_get_groups(map_data, row, column):
+    #Expand the detected walls/borders
+    data = costmap(map_data.data, map_data.info.width, map_data.info.height, map_data.info.resolution)
+
+    data[row][column] = 0 #Robot Current Position
+    data[data > 5] = 1 # 0 is navigable, 100 is a definite obstacle
+
+    data = markFrontiers(data) #Find boundary points
+
+    groups = assign_groups(data) #Group boundary points
+    
+    groups = sortGroups(groups) #Sort the groups from smallest to largest. Take the 5 largest groups
+    
+    data[data < 0] = 1 #-0.05 is unknown. Mark it as not navigable. 0 = navigable, 1 = not navigable.
+
+    return data, groups
+
+def check_scan_for_obstacles(forward_distance, left_forward_distance, left_distance, right_forward_distance, right_distance):
+    # if there is a wall in front, dont go forward
+    if forward_distance < param_robot_r:  
+        return False
+    else:
+        # if theres no wall close to the sides, go forward
+        if (right_forward_distance > param_robot_r and
+                left_forward_distance > param_robot_r):  
+            return True
+        else:
+            # if the robot is aiming away from the wall, go forward
+            if (left_forward_distance > left_distance or right_forward_distance > right_distance):
+                return True
+            else:
+                return False
+
+def turn_around_one_time(self):
+    self.yaw = round(self.yaw,5)
+    start_yaw = self.yaw
+    
+    publish_cmd_vel(self, 0.0, math.pi/4)
+
+    while abs(start_yaw - self.yaw) <= 0.2:
+        # wait until turtlebot starts turning
+        time.sleep(0.01)
+    while abs(start_yaw - self.yaw) > 0.2:
+        # wait until turtlebot turned around 360 degree
+        time.sleep(0.01)
+    
+    publish_cmd_vel(self, 0.0, 0.0)
+
 class explorationControl(Node):
     def __init__(self):
         super().__init__('Exploration')
@@ -406,17 +466,13 @@ class explorationControl(Node):
         print("Initialization done. Start Thread")
         self.explore = True
         # Needs thread because of While True (rclpy.spin)
-        t = threading.Thread(target=self.exp)
+        t = threading.Thread(target=self.run_exploration)
         t.daemon = True # End thread if main thread is stopped
         t.start() #Runs the exploration function as a thread.
         
     def exp(self):
         twist = Twist()
         while True: #Wait for sensor data.
-            if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
-                print("Wait for data")
-                time.sleep(0.1)
-                continue
             if self.explore == True:
                 # is pathGlobal of type int (!= none) and 0?
                 if isinstance(pathGlobal, int) and pathGlobal == 0:
@@ -430,8 +486,6 @@ class explorationControl(Node):
                 if isinstance(self.path, int) and self.path == -1:
                     print("Exploration completed")
                     sys.exit()
-                self.c = int((self.path[-1][0] - self.originX)/self.resolution) 
-                self.r = int((self.path[-1][1] - self.originY)/self.resolution) 
                 self.explore = False
                 self.i = 0
                 print("New target set")
@@ -475,13 +529,87 @@ class explorationControl(Node):
                 time.sleep(0.1)
             #Route Following Block End
 
-    def target_callback(self):
-        exploration(self, self.data,self.width,self.height,self.resolution,self.c,self.r,self.originX,self.originY)
+    def run_exploration(self):
+        # Init        
+        running_state = 0
+        while True:
+            if running_state == 0: 
+                # Wait until data from subscribed topics is available
+                if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
+                    print("Wait for data...")
+                    time.sleep(0.5)
+                    continue
+                else:
+                    turn_around_one_time(self)
+                    running_state = 1
+            elif running_state == 1:
+                # Data received, start exploration
+                row = int((self.y- self.originY)/self.resolution)
+                column = int((self.x - self.originX)/self.resolution)
+
+                data, groups = prepare_map_and_get_groups(self.map_data, row, column)
+                if len(groups) > 0:
+                    running_state = 2
+                else:
+                    # no groups left, end exploration
+                    running_state = 4
+            elif running_state == 2:
+                # choose group and calculate path
+                path, index = findClosestGroup(data, groups, (row,column), self.resolution, self.originX, self.originY) #Find the nearest group
+                if path != None:
+                    print("Path found, smooth it with bspline planner")
+                    
+                    publishGroups(self, data, groups, self.width, self.height, self.resolution, self.originX, self.originY, index)
+                    
+                    path = bspline_planning(path,len(path)*5)
+                    
+                    PublishPath(self, path)
+
+                    PublishTargetPoint(self, path)
+                    
+                    self.i = 0
+                    running_state = 3
+                else:
+                    print("No path found.")
+                    running_state = 4
+            elif running_state == 3:
+                obstacle_detected = check_scan_for_obstacles(self.forward_distance, self.left_forward_distance, self.left_distance, self.right_forward_distance, self.right_distance)
+                distance_to_target_x = abs(self.x - path[-1][0]) 
+                distance_to_target_y = abs(self.y - path[-1][1])
+                print(distance_to_target_x, distance_to_target_y)
+                if obstacle_detected or (distance_to_target_x < param_target_error and distance_to_target_y < param_target_error):
+                    print("Obstacle or target reached")
+                    v = 0.0
+                    w = 0.0
+                    running_state = 1
+                else:
+                    v, w, self.i = pure_pursuit(self.x,self.y,self.yaw, path,self.i)
+
+                publish_cmd_vel(self, v, w)
+            
+            elif running_state == 4:
+                print("Exploration finished")
+                sys.exit()
+            
+            else:
+                print("Unknown running state: ", running_state)
         
     # This function is executed when new scan data is available
     def scan_callback(self,msg):
         self.scan_data = msg
         self.scan = msg.ranges
+
+        number_of_values = len(self.scan)
+        recalc_increment = round(number_of_values / 4)
+    
+        self.forward_distance = msg.ranges[0]
+        self.left_distance = msg.ranges[recalc_increment]
+        self.back_distance = msg.ranges[recalc_increment * 2]
+        self.right_distance = msg.ranges[recalc_increment * 3]
+
+        increment_detailed = round(recalc_increment / 4)
+        self.left_forward_distance = msg.ranges[increment_detailed]
+        self.right_forward_distance = msg.ranges[increment_detailed * 7]
 
     # This function is executed when new map data is available
     def map_callback(self,msg):
