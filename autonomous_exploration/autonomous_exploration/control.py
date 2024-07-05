@@ -229,7 +229,7 @@ def pathLength(path):
     return total_distance
 
 def findClosestGroup(matrix, groups, current, resolution, originX, originY):
-    print(len(groups))
+    print("Number of groups after sortGroups:", len(groups))
     targetP = None
     distances = []
     paths = []
@@ -252,7 +252,6 @@ def findClosestGroup(matrix, groups, current, resolution, originX, originY):
             score.append(points_in_group/distances[i])
     # select path with the best score
     for i in range(len(distances)):
-        print(distances[i])
         if distances[i] > param_target_error*2:
             if max_score_index == -1 or score[i] > score[max_score_index]:
                 max_score_index = i
