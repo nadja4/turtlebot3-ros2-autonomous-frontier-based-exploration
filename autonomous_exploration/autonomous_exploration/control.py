@@ -21,7 +21,7 @@ param_lookahead_distance = params["lookahead_distance"]
 param_speed = params["speed"]
 param_expansion_size = params["expansion_size"]
 param_target_error = params["target_error"]
-param_robot_r = params["robot_r"]
+param_min_distance_to_obstacles = params["min_distance_to_obstacles"]
 
 #region DataTransformation
 # Calculate euler yaw angle from x, y, z, w
@@ -315,20 +315,24 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
 
 def handle_obstacles(self):
     obstacle_detected = False
-    if self.forward_distance < param_robot_r:
+    # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area. 
+    # To ensure that a new path can be planned after the robot has moved out of the obstacle area, 
+    # the "required distance to wall" depends on the "expansion-size". A safety factor of 2 is additionally calculated.
+    required_distance_to_wall = param_expansion_size * self.map_resolution * 2
+    if self.scan_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle in front detected, move backwards")
-        while self.forward_distance <+ param_robot_r*2:
-            publish_cmd_vel(self, -0.02, 0.0)
+        while self.scan_forward_distance <= required_distance_to_wall:
+            publish_cmd_vel(self, -0.05, 0.0)
             obstacle_detected = True
-    if self.left_forward_distance < param_robot_r:
+    if self.scan_left_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front left detected, move forward slowl and turn right")
-        while self.left_forward_distance <= param_robot_r*2:
-            publish_cmd_vel(self, 0.02, -0.2)
+        while self.scan_left_forward_distance <= required_distance_to_wall:
+            publish_cmd_vel(self, 0.05, -math.pi/4)
             obstacle_detected = True
-    if self.right_forward_distance < param_robot_r:
+    if self.scan_right_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front right detected, move forward slowly and turn left")
-        while self.right_forward_distance <= param_robot_r*2:
-            publish_cmd_vel(self, 0.02, 0.2)
+        while self.scan_right_forward_distance <= required_distance_to_wall:
+            publish_cmd_vel(self, 0.05, math.pi/4)
             obstacle_detected = True
     return obstacle_detected
 
@@ -420,7 +424,7 @@ class explorationControl(Node):
             # Wait for data
             if running_state == 0: 
                 # Wait until data from subscribed topics is available
-                if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
+                if not hasattr(self,'map_msg') or not hasattr(self,'odom_msg') or not hasattr(self,'scan_msg'):
                     print("Wait for data...")
                     time.sleep(0.5)
                     continue
@@ -430,10 +434,10 @@ class explorationControl(Node):
             elif running_state == 1:
                 print("Search for next target...")
                 # Data received, start exploration
-                row = int((self.y- self.originY)/self.resolution)
-                column = int((self.x - self.originX)/self.resolution)
+                row = int((self.odom_y- self.map_originY)/self.map_resolution)
+                column = int((self.odom_x - self.map_originX)/self.map_resolution)
 
-                data, groups = prepare_map_and_get_groups(self.map_data, row, column)
+                data, groups = prepare_map_and_get_groups(self.map_msg, row, column)
                 if len(groups) > 0:
                     running_state = 2
                 else:
@@ -444,12 +448,12 @@ class explorationControl(Node):
             elif running_state == 2:
                 # choose group and calculate path
                 # Find the nearest group
-                path, index = find_closest_group(data, groups, (row,column), self.resolution, self.originX, self.originY) 
+                path, index = find_closest_group(data, groups, (row,column), self.map_resolution, self.map_originX, self.map_originY) 
                 if path != None:
                     # Path calculated, smooth it with bspline planner
                     publish_target_point(self, path)
                   
-                    publish_groups(self, data, groups, self.width, self.height, self.resolution, self.originX, self.originY, index)
+                    publish_groups(self, data, groups, self.map_width, self.map_height, self.map_resolution, self.map_originX, self.map_originY, index)
                     
                     path = bspline_planning(path,len(path)*5)
                     
@@ -463,8 +467,8 @@ class explorationControl(Node):
             # Navigate to target
             elif running_state == 3:
                 obstacle_detected = handle_obstacles(self)
-                distance_to_target_x = abs(self.x - path[-1][0]) 
-                distance_to_target_y = abs(self.y - path[-1][1])
+                distance_to_target_x = abs(self.odom_x - path[-1][0]) 
+                distance_to_target_y = abs(self.odom_y - path[-1][1])
                 if obstacle_detected:    
                     v = 0.0
                     w = 0.0
@@ -476,7 +480,7 @@ class explorationControl(Node):
                     w = 0.0
                     running_state = 1
                 else:
-                    v, w, self.i = pure_pursuit(self.x,self.y,self.yaw, path,self.i)
+                    v, w, self.i = pure_pursuit(self.odom_x,self.odom_y,self.odom_yaw, path,self.i)
 
                 publish_cmd_vel(self, v, w)
             # Exit
@@ -489,35 +493,36 @@ class explorationControl(Node):
         
     # This function is executed when new scan data is available
     def scan_callback(self,msg):
-        self.scan_data = msg
-        self.scan = msg.ranges
+        self.scan_msg = msg
+        scan = msg.ranges
 
-        np.nan_to_num(self.scan, nan=param_robot_r+0.1)
+        # Set all nan values to "values in range"
+        np.nan_to_num(scan, nan=param_min_distance_to_obstacles+0.1) 
 
-        number_of_values = len(self.scan)
+        number_of_values = len(scan)
         increment = round(number_of_values / 16)
     
-        forward_distance = msg.ranges[0:increment] + msg.ranges[increment*15:]
-        self.forward_distance = min(forward_distance)
-        self.left_forward_distance = min(msg.ranges[increment:increment*4])
-        self.right_forward_distance = min(msg.ranges[increment*12:increment*15])
+        forward_distance = scan[0:increment] + scan[increment*15:]
+        self.scan_forward_distance = min(forward_distance)
+        self.scan_left_forward_distance = min(scan[increment:increment*4])
+        self.scan_right_forward_distance = min(scan[increment*12:increment*15])
 
     # This function is executed when new map data is available
     def map_callback(self,msg):
-        self.map_data = msg
-        self.resolution = self.map_data.info.resolution
-        self.originX = self.map_data.info.origin.position.x
-        self.originY = self.map_data.info.origin.position.y
-        self.width = self.map_data.info.width
-        self.height = self.map_data.info.height
-        self.data = self.map_data.data
+        self.map_msg = msg
+        self.map_resolution = self.map_msg.info.resolution
+        self.map_originX = self.map_msg.info.origin.position.x
+        self.map_originY = self.map_msg.info.origin.position.y
+        self.map_width = self.map_msg.info.width
+        self.map_height = self.map_msg.info.height
+        self.map_data = self.map_msg.data
 
     # This function is executed when new odom data is available
     def odom_callback(self,msg):
-        self.odom_data = msg
-        self.x = msg.pose.pose.position.x
-        self.y = msg.pose.pose.position.y
-        self.yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
+        self.odom_msg = msg
+        self.odom_x = msg.pose.pose.position.x
+        self.odom_y = msg.pose.pose.position.y
+        self.odom_yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
         msg.pose.pose.orientation.z,msg.pose.pose.orientation.w)
 
 def signal_handler(signal, frame):

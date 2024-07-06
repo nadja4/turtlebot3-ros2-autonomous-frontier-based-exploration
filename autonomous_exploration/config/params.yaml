@@ -2,4 +2,4 @@ lookahead_distance : 0.24
 speed : 0.1 #max speed
 expansion_size : 3 #wall expansion coefficient
 target_error : 0.15 #margin of error to target
-robot_r : 0.2 #robot distance for local security
+min_distance_to_obstacles : 0.2 #robot distance for local security
