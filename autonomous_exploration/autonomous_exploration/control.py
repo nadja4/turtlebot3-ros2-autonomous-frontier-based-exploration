@@ -1,13 +1,18 @@
 import rclpy
 from rclpy.node import Node
-from nav_msgs.msg import OccupancyGrid , Odometry, Path
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from geometry_msgs.msg import Twist, PointStamped, PoseStamped
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Header
 import numpy as np
-import heapq , math , random , yaml
+import heapq
+import math
+import random
+import yaml
 import scipy.interpolate as si
-import sys , threading , time
+import sys
+import threading
+import time
 import signal
 import subprocess
 
@@ -23,9 +28,11 @@ param_expansion_size = params["expansion_size"]
 param_target_error = params["target_error"]
 param_min_distance_to_obstacles = params["min_distance_to_obstacles"]
 
-#region DataTransformation
+# region DataTransformation
 # Calculate euler yaw angle from x, y, z, w
-def euler_from_quaternion(x,y,z,w):
+
+
+def euler_from_quaternion(x, y, z, w):
     t0 = +2.0 * (w * x + y * z)
     t1 = +1.0 - 2.0 * (x * x + y * y)
     roll_x = math.atan2(t0, t1)
@@ -37,28 +44,34 @@ def euler_from_quaternion(x,y,z,w):
     t4 = +1.0 - 2.0 * (y * y + z * z)
     yaw_z = math.atan2(t3, t4)
     return yaw_z
-#endregion DataTransformation
+# endregion DataTransformation
 
-#region MapPreparation
+# region MapPreparation
+
+
 def prepare_map_and_get_groups(map_data, row, column):
-    #Expand the detected walls/borders
-    data = costmap(map_data.data, map_data.info.width, map_data.info.height, map_data.info.resolution)
+    # Expand the detected walls/borders
+    data = costmap(map_data.data, map_data.info.width,
+                   map_data.info.height, map_data.info.resolution)
 
-    data[row][column] = 0 #Robot Current Position
-    data[data > 5] = 1 # 0 is navigable, 100 is a definite obstacle
+    data[row][column] = 0  # Robot Current Position
+    data[data > 5] = 1  # 0 is navigable, 100 is a definite obstacle
 
-    data = mark_frontiers(data) #Find boundary points
+    data = mark_frontiers(data)  # Find boundary points
 
-    groups = assign_groups(data) #Group boundary points
-    
-    groups = sort_groups(groups) #Sort the groups from smallest to largest. Take the 5 largest groups
-    
-    data[data < 0] = 1 #-0.05 is unknown. Mark it as not navigable. 0 = navigable, 1 = not navigable.
+    groups = assign_groups(data)  # Group boundary points
+
+    # Sort the groups from smallest to largest. Take the 5 largest groups
+    groups = sort_groups(groups)
+
+    # -0.05 is unknown. Mark it as not navigable. 0 = navigable, 1 = not navigable.
+    data[data < 0] = 1
 
     return data, groups
 
+
 def costmap(data, width, height, resolution):
-     # Reshape 1D data array into 2D array, based on height and width of map
+    # Reshape 1D data array into 2D array, based on height and width of map
     data = np.array(data).reshape(height, width)
     # Get the positions of walls in the map (x-value and y-value)
     wall = np.where(data == 100)
@@ -66,22 +79,23 @@ def costmap(data, width, height, resolution):
     for i in range(-param_expansion_size, param_expansion_size+1):
         for j in range(-param_expansion_size, param_expansion_size+1):
             # Skip the center position (the original wall position)
-            if i  == 0 and j == 0:
+            if i == 0 and j == 0:
                 continue
             # Calculate the new positions to expand to
             x = wall[0]+i
             y = wall[1]+j
-            # Ensure the new positions are within the bounds of the map 
-            x = np.clip(x,0,height-1)
-            y = np.clip(y,0,width-1)
+            # Ensure the new positions are within the bounds of the map
+            x = np.clip(x, 0, height-1)
+            y = np.clip(y, 0, width-1)
             # Set the new positions to 100 (indicating expanded walls)
-            data[x,y] = 100
+            data[x, y] = 100
     # Scale the data array by the resolution value
     data = data*resolution
     return data
 
+
 def mark_frontiers(matrix):
-    # Search for frontier areas between already explored and navigable (value 0) and not yet explored (value < 0) areas on the map. Mark the pixels in this area with the value 2. 
+    # Search for frontier areas between already explored and navigable (value 0) and not yet explored (value < 0) areas on the map. Mark the pixels in this area with the value 2.
     for i in range(len(matrix)):
         for j in range(len(matrix[i])):
             if matrix[i][j] == 0.0:
@@ -96,6 +110,8 @@ def mark_frontiers(matrix):
     return matrix
 
 # depth-first-search, search for groups (Adjacent pixels with the same value)
+
+
 def dfs(matrix, i, j, group, groups):
     if i < 0 or i >= len(matrix) or j < 0 or j >= len(matrix[0]):
         return group
@@ -110,31 +126,36 @@ def dfs(matrix, i, j, group, groups):
     dfs(matrix, i - 1, j, group, groups)
     dfs(matrix, i, j + 1, group, groups)
     dfs(matrix, i, j - 1, group, groups)
-    dfs(matrix, i + 1, j + 1, group, groups) # lower right cross
-    dfs(matrix, i - 1, j - 1, group, groups) # upper left cross
-    dfs(matrix, i - 1, j + 1, group, groups) # upper right cross
-    dfs(matrix, i + 1, j - 1, group, groups) # lower left cross
+    dfs(matrix, i + 1, j + 1, group, groups)  # lower right cross
+    dfs(matrix, i - 1, j - 1, group, groups)  # upper left cross
+    dfs(matrix, i - 1, j + 1, group, groups)  # upper right cross
+    dfs(matrix, i + 1, j - 1, group, groups)  # lower left cross
     return group + 1
+
 
 def assign_groups(matrix):
     group = 1
-    groups = {} # Dictionary for group keys and coordinates
+    groups = {}  # Dictionary for group keys and coordinates
     # Iterate through each position in the map
     for i in range(len(matrix)):
         for j in range(len(matrix[0])):
-             # Check if current cell is marked as frontier
-            if matrix[i][j] == 2: 
+            # Check if current cell is marked as frontier
+            if matrix[i][j] == 2:
                 group = dfs(matrix, i, j, group, groups)
     return groups
 
+
 def sort_groups(groups):
-    sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
-    top_five_groups = [g for g in sorted_groups[:5] if len(g[1]) > 2]    
+    sorted_groups = sorted(
+        groups.items(), key=lambda x: len(x[1]), reverse=True)
+    top_five_groups = [g for g in sorted_groups[:5] if len(g[1]) > 2]
     return top_five_groups
 
-#endregion MapPreparation
+# endregion MapPreparation
 
-#region CalculateWhereToGo
+# region CalculateWhereToGo
+
+
 def calculate_centroid(x_coords, y_coords):
     n = len(x_coords)
     sum_x = sum(x_coords)
@@ -144,16 +165,20 @@ def calculate_centroid(x_coords, y_coords):
     centroid = (int(mean_x), int(mean_y))
     return centroid
 
+
 def heuristic(a, b):
     return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
 
 # A*-Algorithm for path calculation
+
+
 def astar(array, start, goal):
-    neighbors = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
+    neighbors = [(0, 1), (0, -1), (1, 0), (-1, 0),
+                 (1, 1), (1, -1), (-1, 1), (-1, -1)]
     close_set = set()
     came_from = {}
-    gscore = {start:0}
-    fscore = {start:heuristic(start, goal)}
+    gscore = {start: 0}
+    fscore = {start: heuristic(start, goal)}
     oheap = []
     heapq.heappush(oheap, (fscore[start], start))
     while oheap:
@@ -171,7 +196,7 @@ def astar(array, start, goal):
             neighbor = current[0] + i, current[1] + j
             tentative_g_score = gscore[current] + heuristic(current, neighbor)
             if 0 <= neighbor[0] < array.shape[0]:
-                if 0 <= neighbor[1] < array.shape[1]:                
+                if 0 <= neighbor[1] < array.shape[1]:
                     if array[neighbor[0]][neighbor[1]] == 1:
                         continue
                 else:
@@ -182,10 +207,11 @@ def astar(array, start, goal):
                 continue
             if neighbor in close_set and tentative_g_score >= gscore.get(neighbor, 0):
                 continue
-            if  tentative_g_score < gscore.get(neighbor, 0) or neighbor not in [i[1]for i in oheap]:
+            if tentative_g_score < gscore.get(neighbor, 0) or neighbor not in [i[1]for i in oheap]:
                 came_from[neighbor] = current
                 gscore[neighbor] = tentative_g_score
-                fscore[neighbor] = tentative_g_score + heuristic(neighbor, goal)
+                fscore[neighbor] = tentative_g_score + \
+                    heuristic(neighbor, goal)
                 heapq.heappush(oheap, (fscore[neighbor], neighbor))
     # If no path to goal was found, return closest path to goal
     if goal not in came_from:
@@ -206,14 +232,16 @@ def astar(array, start, goal):
             return data
     return False
 
+
 def get_path_length(path):
     for i in range(len(path)):
-        path[i] = (path[i][0],path[i][1])
+        path[i] = (path[i][0], path[i][1])
         points = np.array(path)
     differences = np.diff(points, axis=0)
-    distances = np.hypot(differences[:,0], differences[:,1])
+    distances = np.hypot(differences[:, 0], differences[:, 1])
     total_distance = np.sum(distances)
     return total_distance
+
 
 def find_closest_group(matrix, groups, current, resolution, originX, originY):
     # print("Number of groups after sortGroups:", len(groups)) # debug proposes
@@ -221,12 +249,14 @@ def find_closest_group(matrix, groups, current, resolution, originX, originY):
     distances = []
     paths = []
     score = []
-    max_score_index = -1 #max score index
+    max_score_index = -1  # max score index
     for i in range(len(groups)):
-        middle = calculate_centroid([p[0] for p in groups[i][1]],[p[1] for p in groups[i][1]])
+        middle = calculate_centroid([p[0] for p in groups[i][1]], [
+                                    p[1] for p in groups[i][1]])
         # Calculate path to centroid/middle of the group
         path = astar(matrix, current, middle)
-        path = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
+        path = [(p[1]*resolution+originX, p[0]*resolution+originY)
+                for p in path]
         total_distance = get_path_length(path)
         distances.append(total_distance)
         paths.append(path)
@@ -245,16 +275,19 @@ def find_closest_group(matrix, groups, current, resolution, originX, originY):
     if max_score_index != -1:
         targetP = paths[max_score_index]
         index = max_score_index
-    else: # If #groups are closer than target_error*2, it chooses a random point as a target. This allows the robot to get out of some situations.
+    else:  # If #groups are closer than target_error*2, it chooses a random point as a target. This allows the robot to get out of some situations.
         print("Choose random target")
-        index = random.randint(0,len(groups)-1)
+        index = random.randint(0, len(groups)-1)
         target = groups[index][1]
-        target = target[random.randint(0,len(target)-1)]
+        target = target[random.randint(0, len(target)-1)]
         path = astar(matrix, current, target)
-        targetP = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
+        targetP = [(p[1]*resolution+originX, p[0]*resolution+originY)
+                   for p in path]
     return targetP, index
 
 #  B-Spline-Interpolation, smooth path
+
+
 def bspline_planning(array, sn):
     try:
         array = np.array(array)
@@ -276,19 +309,21 @@ def bspline_planning(array, sn):
         ipl_t = np.linspace(0.0, len(x) - 1, sn)
         rx = si.splev(ipl_t, x_list)
         ry = si.splev(ipl_t, y_list)
-        path = [(rx[i],ry[i]) for i in range(len(rx))]
+        path = [(rx[i], ry[i]) for i in range(len(rx))]
     except:
         path = array
     return path
 
-#endregion CalculateWhereToGo
+# endregion CalculateWhereToGo
 
-#region Navigation
+# region Navigation
 # Calculate the steering angle required to follow the path
+
+
 def pure_pursuit(current_x, current_y, current_heading, path, index):
     closest_point = None
     v = param_speed
-    for i in range(index,len(path)):
+    for i in range(index, len(path)):
         x = path[i][0]
         y = path[i][1]
         distance = math.hypot(current_x - x, current_y - y)
@@ -297,10 +332,12 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
             index = i
             break
     if closest_point is not None:
-        target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
+        target_heading = math.atan2(
+            closest_point[1] - current_y, closest_point[0] - current_x)
         desired_steering_angle = target_heading - current_heading
     else:
-        target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
+        target_heading = math.atan2(
+            path[-1][1] - current_y, path[-1][0] - current_x)
         desired_steering_angle = target_heading - current_heading
         index = len(path)-1
     if desired_steering_angle > math.pi:
@@ -313,10 +350,11 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
         v = 0.0
     return v, desired_steering_angle, index
 
+
 def handle_obstacles(self):
     obstacle_detected = False
-    # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area. 
-    # To ensure that a new path can be planned after the robot has moved out of the obstacle area, 
+    # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area.
+    # To ensure that a new path can be planned after the robot has moved out of the obstacle area,
     # the "required distance to wall" depends on the "expansion-size". A safety factor of 2 is additionally calculated.
     required_distance_to_wall = param_expansion_size * self.map_resolution * 2
     if self.scan_forward_distance < param_min_distance_to_obstacles:
@@ -336,9 +374,11 @@ def handle_obstacles(self):
             obstacle_detected = True
     return obstacle_detected
 
-#endregion Navigation
+# endregion Navigation
 
-#region RosDebuggingTopics
+# region RosDebuggingTopics
+
+
 def publish_cmd_vel(self, v, w):
     twist = Twist()
     twist.linear.x = v
@@ -346,32 +386,34 @@ def publish_cmd_vel(self, v, w):
 
     self.publisher.publish(twist)
 
+
 def publish_groups(self, data, groups, width, height, resolution, originX, originY, index):
-        map_msg = OccupancyGrid()
-        map_msg.header = Header()
-        map_msg.header.stamp = self.get_clock().now().to_msg()
-        map_msg.header.frame_id = "map"
+    map_msg = OccupancyGrid()
+    map_msg.header = Header()
+    map_msg.header.stamp = self.get_clock().now().to_msg()
+    map_msg.header.frame_id = "map"
 
-        map_msg.info.resolution = resolution
-        map_msg.info.width = width
-        map_msg.info.height = height
-        map_msg.info.origin.position.x = originX
-        map_msg.info.origin.position.y = originY
-        map_msg.info.origin.position.z = 0.0
-        map_msg.info.origin.orientation.w = 1.0
+    map_msg.info.resolution = resolution
+    map_msg.info.width = width
+    map_msg.info.height = height
+    map_msg.info.origin.position.x = originX
+    map_msg.info.origin.position.y = originY
+    map_msg.info.origin.position.z = 0.0
+    map_msg.info.origin.orientation.w = 1.0
 
-        send_data = data * 0
-        for i in range(len(groups)):
-            values = groups[i][1]
-            if i == index:
-                color = 100
-            else:
-                color = 20 * i
-            for a in range(len(values)):
-                send_data[values[a][0]][values[a][1]] = color
+    send_data = data * 0
+    for i in range(len(groups)):
+        values = groups[i][1]
+        if i == index:
+            color = 100
+        else:
+            color = 20 * i
+        for a in range(len(values)):
+            send_data[values[a][0]][values[a][1]] = color
 
-        map_msg.data = send_data.astype(int).flatten().tolist()
-        self.publisher_map.publish(map_msg)
+    map_msg.data = send_data.astype(int).flatten().tolist()
+    self.publisher_map.publish(map_msg)
+
 
 def publish_path(self, path):
     pub_path = Path()
@@ -386,45 +428,52 @@ def publish_path(self, path):
         pose.pose.position.z = 0.0
         pose.pose.orientation.w = 1.0
         pub_path.poses.append(pose)
-    
+
     self.publisher_path.publish(pub_path)
 
-def publish_target_point(self, path):    
+
+def publish_target_point(self, path):
     point = PointStamped()
     point.header.stamp = self.get_clock().now().to_msg()
-    point.header.frame_id = "map" 
+    point.header.frame_id = "map"
     point.point.x = path[-1][0]
     point.point.y = path[-1][1]
     point.point.z = 0.0
-    self.publisher_point.publish(point) 
+    self.publisher_point.publish(point)
 
-#endregion RosDebuggingTopics
+# endregion RosDebuggingTopics
+
 
 class explorationControl(Node):
     def __init__(self):
         super().__init__('Exploration')
-        self.subscription = self.create_subscription(OccupancyGrid,'map',self.map_callback,10)
-        self.subscription = self.create_subscription(Odometry,'odom',self.odom_callback,10)
-        self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,qos_profile_sensor_data)
+        self.subscription = self.create_subscription(
+            OccupancyGrid, 'map', self.map_callback, 10)
+        self.subscription = self.create_subscription(
+            Odometry, 'odom', self.odom_callback, 10)
+        self.subscription = self.create_subscription(
+            LaserScan, 'scan', self.scan_callback, qos_profile_sensor_data)
         self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.publisher_point = self.create_publisher(PointStamped, '/point_topic', 10)
-        self.publisher_map = self.create_publisher(OccupancyGrid, '/group_map_topic', 10)
+        self.publisher_point = self.create_publisher(
+            PointStamped, '/point_topic', 10)
+        self.publisher_map = self.create_publisher(
+            OccupancyGrid, '/group_map_topic', 10)
         self.publisher_path = self.create_publisher(Path, '/path_topic', 10)
 
         print("Initialization done. Start Thread")
         # Needs thread because of While True and rclpy.spin in main
         t = threading.Thread(target=self.run_exploration)
-        t.daemon = True # End thread if main thread is stopped
-        t.start() #Runs the exploration function as a thread.
+        t.daemon = True  # End thread if main thread is stopped
+        t.start()  # Runs the exploration function as a thread.
 
     def run_exploration(self):
-        # Init        
+        # Init
         running_state = 0
         while True:
             # Wait for data
-            if running_state == 0: 
+            if running_state == 0:
                 # Wait until data from subscribed topics is available
-                if not hasattr(self,'map_msg') or not hasattr(self,'odom_msg') or not hasattr(self,'scan_msg'):
+                if not hasattr(self, 'map_msg') or not hasattr(self, 'odom_msg') or not hasattr(self, 'scan_msg'):
                     print("Wait for data...")
                     time.sleep(0.5)
                     continue
@@ -434,10 +483,12 @@ class explorationControl(Node):
             elif running_state == 1:
                 print("Search for next target...")
                 # Data received, start exploration
-                row = int((self.odom_y- self.map_originY)/self.map_resolution)
-                column = int((self.odom_x - self.map_originX)/self.map_resolution)
+                row = int((self.odom_y - self.map_originY)/self.map_resolution)
+                column = int((self.odom_x - self.map_originX) /
+                             self.map_resolution)
 
-                data, groups = prepare_map_and_get_groups(self.map_msg, row, column)
+                data, groups = prepare_map_and_get_groups(
+                    self.map_msg, row, column)
                 if len(groups) > 0:
                     running_state = 2
                 else:
@@ -448,15 +499,17 @@ class explorationControl(Node):
             elif running_state == 2:
                 # choose group and calculate path
                 # Find the nearest group
-                path, index = find_closest_group(data, groups, (row,column), self.map_resolution, self.map_originX, self.map_originY) 
+                path, index = find_closest_group(
+                    data, groups, (row, column), self.map_resolution, self.map_originX, self.map_originY)
                 if path != None:
                     # Path calculated, smooth it with bspline planner
                     publish_target_point(self, path)
-                  
-                    publish_groups(self, data, groups, self.map_width, self.map_height, self.map_resolution, self.map_originX, self.map_originY, index)
-                    
-                    path = bspline_planning(path,len(path)*5)
-                    
+
+                    publish_groups(self, data, groups, self.map_width, self.map_height,
+                                   self.map_resolution, self.map_originX, self.map_originY, index)
+
+                    path = bspline_planning(path, len(path)*5)
+
                     publish_path(self, path)
 
                     self.i = 0
@@ -467,9 +520,9 @@ class explorationControl(Node):
             # Navigate to target
             elif running_state == 3:
                 obstacle_detected = handle_obstacles(self)
-                distance_to_target_x = abs(self.odom_x - path[-1][0]) 
+                distance_to_target_x = abs(self.odom_x - path[-1][0])
                 distance_to_target_y = abs(self.odom_y - path[-1][1])
-                if obstacle_detected:    
+                if obstacle_detected:
                     v = 0.0
                     w = 0.0
                     running_state = 1
@@ -480,35 +533,36 @@ class explorationControl(Node):
                     w = 0.0
                     running_state = 1
                 else:
-                    v, w, self.i = pure_pursuit(self.odom_x,self.odom_y,self.odom_yaw, path,self.i)
+                    v, w, self.i = pure_pursuit(
+                        self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
 
                 publish_cmd_vel(self, v, w)
             # Exit
             elif running_state == 4:
                 print("Exploration finished")
                 sys.exit()
-            
+
             else:
                 print("Unknown running state: ", running_state)
-        
+
     # This function is executed when new scan data is available
-    def scan_callback(self,msg):
+    def scan_callback(self, msg):
         self.scan_msg = msg
         scan = msg.ranges
 
         # Set all nan values to "values in range"
-        np.nan_to_num(scan, nan=param_min_distance_to_obstacles+0.1) 
+        np.nan_to_num(scan, nan=param_min_distance_to_obstacles+0.1)
 
         number_of_values = len(scan)
         increment = round(number_of_values / 16)
-    
+
         forward_distance = scan[0:increment] + scan[increment*15:]
         self.scan_forward_distance = min(forward_distance)
         self.scan_left_forward_distance = min(scan[increment:increment*4])
         self.scan_right_forward_distance = min(scan[increment*12:increment*15])
 
     # This function is executed when new map data is available
-    def map_callback(self,msg):
+    def map_callback(self, msg):
         self.map_msg = msg
         self.map_resolution = self.map_msg.info.resolution
         self.map_originX = self.map_msg.info.origin.position.x
@@ -518,22 +572,25 @@ class explorationControl(Node):
         self.map_data = self.map_msg.data
 
     # This function is executed when new odom data is available
-    def odom_callback(self,msg):
+    def odom_callback(self, msg):
         self.odom_msg = msg
         self.odom_x = msg.pose.pose.position.x
         self.odom_y = msg.pose.pose.position.y
-        self.odom_yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
-        msg.pose.pose.orientation.z,msg.pose.pose.orientation.w)
+        self.odom_yaw = euler_from_quaternion(msg.pose.pose.orientation.x, msg.pose.pose.orientation.y,
+                                              msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+
 
 def signal_handler(signal, frame):
     print("\n \n######\n\nExiting started... Turtlebot will be stopped as soon as possible, be patient!\n\n#####\n \n")
 
-    command = ["ros2", "topic", "pub", "--once", "/cmd_vel", "geometry_msgs/msg/Twist", "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"]
+    command = ["ros2", "topic", "pub", "--once", "/cmd_vel", "geometry_msgs/msg/Twist",
+               "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"]
 
     result = subprocess.run(command, capture_output=True, text=True)
 
     print("Exited.")
     sys.exit(0)
+
 
 def main(args=None):
     signal.signal(signal.SIGINT, signal_handler)
@@ -543,6 +600,7 @@ def main(args=None):
     rclpy.spin(exploration_control)
     exploration_control.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

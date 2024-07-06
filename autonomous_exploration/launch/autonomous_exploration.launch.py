@@ -14,7 +14,8 @@ TURTLEBOT3_MODEL = os.environ['TURTLEBOT3_MODEL']
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
 
-    slam_toolbox_launchfile_dir = os.path.join(get_package_share_directory('slam_toolbox'), 'launch')
+    slam_toolbox_launchfile_dir = os.path.join(
+        get_package_share_directory('slam_toolbox'), 'launch')
 
     rviz_config_dir = os.path.join(
         get_package_share_directory('autonomous_exploration'),
@@ -28,12 +29,13 @@ def generate_launch_description():
             description='Use simulation (Gazebo) clock if true'),
 
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([slam_toolbox_launchfile_dir, '/online_async_launch.py']),
+            PythonLaunchDescriptionSource(
+                [slam_toolbox_launchfile_dir, '/online_async_launch.py']),
             launch_arguments={
-                #'map': map_dir,
+                # 'map': map_dir,
                 'use_sim_time': use_sim_time,
-                #'params_file': param_dir
-                }.items(),
+                # 'params_file': param_dir
+            }.items(),
         ),
 
         Node(
