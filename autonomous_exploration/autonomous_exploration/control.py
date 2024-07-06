@@ -243,7 +243,7 @@ def get_path_length(path):
     return total_distance
 
 
-def find_closest_group(matrix, groups, current, resolution, originX, originY):
+def find_closest_group(self, matrix, groups, current, resolution, originX, originY):
     # print("Number of groups after sortGroups:", len(groups)) # debug proposes
     targetP = None
     distances = []
@@ -253,6 +253,9 @@ def find_closest_group(matrix, groups, current, resolution, originX, originY):
     for i in range(len(groups)):
         middle = calculate_centroid([p[0] for p in groups[i][1]], [
                                     p[1] for p in groups[i][1]])
+        publish_middle_x = middle[0]*resolution+originX
+        publish_middle_y = middle[1]*resolution+originY
+        publish_centroid_point(self, (publish_middle_x, publish_middle_y))
         # Calculate path to centroid/middle of the group
         path = astar(matrix, current, middle)
         path = [(p[1]*resolution+originX, p[0]*resolution+originY)
@@ -274,16 +277,17 @@ def find_closest_group(matrix, groups, current, resolution, originX, originY):
                 max_score_index = i
     if max_score_index != -1:
         targetP = paths[max_score_index]
-        index = max_score_index
-    else:  # If #groups are closer than target_error*2, it chooses a random point as a target. This allows the robot to get out of some situations.
-        print("Choose random target")
-        index = random.randint(0, len(groups)-1)
-        target = groups[index][1]
-        target = target[random.randint(0, len(target)-1)]
-        path = astar(matrix, current, target)
-        targetP = [(p[1]*resolution+originX, p[0]*resolution+originY)
-                   for p in path]
-    return targetP, index
+        # index = max_score_index
+    # else:  # If all groups are closer than target_error*2, it chooses a random point as a target. This allows the robot to get out of some situations.
+        # print("Choose random group")
+        # index = random.randint(0, len(groups)-1)
+        # target = groups[index][1]
+        # target = target[random.randint(0, len(target)-1)]
+        # targetP = paths[index]
+        # path = astar(matrix, current, target)
+        # targetP = [(p[1]*resolution+originX, p[0]*resolution+originY)
+        #            for p in path]
+    return targetP, max_score_index
 
 #  B-Spline-Interpolation, smooth path
 
@@ -358,9 +362,9 @@ def handle_obstacles(self):
     # the "required distance to wall" depends on the "expansion-size". A safety factor of 2 is additionally calculated.
     required_distance_to_wall = param_expansion_size * self.map_resolution * 2
     if self.scan_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle in front detected, move backwards")
+        print("Obstacle in front detected, move backwards and turn left")
         while self.scan_forward_distance <= required_distance_to_wall:
-            publish_cmd_vel(self, -0.05, 0.0)
+            publish_cmd_vel(self, -0.08, 0.1)
             obstacle_detected = True
     if self.scan_left_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front left detected, move forward slowl and turn right")
@@ -441,6 +445,16 @@ def publish_target_point(self, path):
     point.point.z = 0.0
     self.publisher_point.publish(point)
 
+
+def publish_centroid_point(self, middle):
+    point = PointStamped()
+    point.header.stamp = self.get_clock().now().to_msg()
+    point.header.frame_id = "map"
+    point.point.x = middle[0]
+    point.point.y = middle[1]
+    point.point.z = 0.0
+    self.publisher_centroid.publish(point)
+
 # endregion RosDebuggingTopics
 
 
@@ -459,6 +473,8 @@ class explorationControl(Node):
         self.publisher_map = self.create_publisher(
             OccupancyGrid, '/group_map_topic', 10)
         self.publisher_path = self.create_publisher(Path, '/path_topic', 10)
+        self.publisher_centroid = self.create_publisher(
+            PointStamped, '/centroid_topic', 10)
 
         print("Initialization done. Start Thread")
         # Needs thread because of While True and rclpy.spin in main
@@ -499,8 +515,8 @@ class explorationControl(Node):
             elif running_state == 2:
                 # choose group and calculate path
                 # Find the nearest group
-                path, index = find_closest_group(
-                    data, groups, (row, column), self.map_resolution, self.map_originX, self.map_originY)
+                path, index = find_closest_group(self,
+                                                 data, groups, (row, column), self.map_resolution, self.map_originX, self.map_originY)
                 if path != None:
                     # Path calculated, smooth it with bspline planner
                     publish_target_point(self, path)
@@ -516,7 +532,7 @@ class explorationControl(Node):
                     running_state = 3
                 else:
                     print("No path found.")
-                    running_state = 4
+                    running_state = 1
             # Navigate to target
             elif running_state == 3:
                 obstacle_detected = handle_obstacles(self)
