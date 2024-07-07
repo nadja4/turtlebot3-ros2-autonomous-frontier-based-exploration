@@ -243,23 +243,38 @@ def get_path_length(path):
     return total_distance
 
 
-def find_closest_group(self, matrix, groups, current, resolution, originX, originY):
-    # print("Number of groups after sortGroups:", len(groups)) # debug proposes
-    targetP = None
+def get_path(matrix, odom_y, odom_x, target, originY, originX, map_resolution):
+    row = int((odom_y - originY)/map_resolution)
+    column = int((odom_x - originX) / map_resolution)
+
+    current = (row, column)
+    path = astar(matrix, current, target)
+    path = [(p[1]*map_resolution+originX, p[0]*map_resolution+originY)
+            for p in path]
+    return path
+
+
+def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX, odomY):
+    target_path = None
+    target_point = None
     distances = []
     paths = []
     score = []
+    target_points = []
     max_score_index = -1  # max score index
     for i in range(len(groups)):
         middle = calculate_centroid([p[0] for p in groups[i][1]], [
                                     p[1] for p in groups[i][1]])
-        publish_middle_x = middle[0]*resolution+originX
-        publish_middle_y = middle[1]*resolution+originY
-        publish_centroid_point(self, (publish_middle_x, publish_middle_y))
+
+        # For debugging
+        # publish_middle_x = middle[1]*resolution+originX
+        # publish_middle_y = middle[0]*resolution+originY
+        # publish_centroid_point(self, (publish_middle_x, publish_middle_y))
+
         # Calculate path to centroid/middle of the group
-        path = astar(matrix, current, middle)
-        path = [(p[1]*resolution+originX, p[0]*resolution+originY)
-                for p in path]
+        target_points.append(middle)
+        path = get_path(matrix, odomY, odomX, middle,
+                        originY, originX, resolution)
         total_distance = get_path_length(path)
         distances.append(total_distance)
         paths.append(path)
@@ -276,18 +291,16 @@ def find_closest_group(self, matrix, groups, current, resolution, originX, origi
             if max_score_index == -1 or score[i] > score[max_score_index]:
                 max_score_index = i
     if max_score_index != -1:
-        targetP = paths[max_score_index]
-        # index = max_score_index
-    # else:  # If all groups are closer than target_error*2, it chooses a random point as a target. This allows the robot to get out of some situations.
-        # print("Choose random group")
-        # index = random.randint(0, len(groups)-1)
-        # target = groups[index][1]
-        # target = target[random.randint(0, len(target)-1)]
-        # targetP = paths[index]
-        # path = astar(matrix, current, target)
-        # targetP = [(p[1]*resolution+originX, p[0]*resolution+originY)
-        #            for p in path]
-    return targetP, max_score_index
+        target_path = paths[max_score_index]
+        target_point = target_points[max_score_index]
+    else:
+        print("Choose random target point")
+        index = random.randint(0, len(groups)-1)
+        target_group = groups[index][1]
+        target_point = target_group[random.randint(0, len(target_group)-1)]
+        target_path = get_path(matrix, odomY, odomX,
+                               target_point, originY, originX, resolution)
+    return target_path, max_score_index, target_point
 
 #  B-Spline-Interpolation, smooth path
 
@@ -359,22 +372,19 @@ def handle_obstacles(self):
     obstacle_detected = False
     # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area.
     # To ensure that a new path can be planned after the robot has moved out of the obstacle area,
-    # the "required distance to wall" depends on the "expansion-size". A safety factor of 2 is additionally calculated.
+    # the "required distance to wall" depends on the "expansion-size".
     required_distance_to_wall = param_expansion_size * self.map_resolution * 2
-    if self.scan_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle in front detected, move backwards and turn left")
-        while self.scan_forward_distance <= required_distance_to_wall:
-            publish_cmd_vel(self, -0.08, 0.1)
-            obstacle_detected = True
     if self.scan_left_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle front left detected, move forward slowl and turn right")
+        print("Obstacle front left detected, move forward slowly and turn right")
         while self.scan_left_forward_distance <= required_distance_to_wall:
-            publish_cmd_vel(self, 0.05, -math.pi/4)
+            publish_cmd_vel(self, 0.06, -math.pi/4)
+            time.sleep(0.1)
             obstacle_detected = True
     if self.scan_right_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front right detected, move forward slowly and turn left")
         while self.scan_right_forward_distance <= required_distance_to_wall:
-            publish_cmd_vel(self, 0.05, math.pi/4)
+            publish_cmd_vel(self, 0.06, math.pi/4)
+            time.sleep(0.1)
             obstacle_detected = True
     return obstacle_detected
 
@@ -476,6 +486,8 @@ class explorationControl(Node):
         self.publisher_centroid = self.create_publisher(
             PointStamped, '/centroid_topic', 10)
 
+        self.get_new_target = True
+
         print("Initialization done. Start Thread")
         # Needs thread because of While True and rclpy.spin in main
         t = threading.Thread(target=self.run_exploration)
@@ -485,6 +497,7 @@ class explorationControl(Node):
     def run_exploration(self):
         # Init
         running_state = 0
+        retries = 0
         while True:
             # Wait for data
             if running_state == 0:
@@ -497,8 +510,9 @@ class explorationControl(Node):
                     running_state = 1
             # Prepare map
             elif running_state == 1:
-                print("Search for next target...")
                 # Data received, start exploration
+                # current position on map
+
                 row = int((self.odom_y - self.map_originY)/self.map_resolution)
                 column = int((self.odom_x - self.map_originX) /
                              self.map_resolution)
@@ -510,43 +524,62 @@ class explorationControl(Node):
                 else:
                     # no groups left, end exploration
                     print("No groups with more than 2 points found.")
-                    running_state = 4
+                    running_state = 5
             # Choose target, plan path
             elif running_state == 2:
-                # choose group and calculate path
-                # Find the nearest group
-                path, index = find_closest_group(self,
-                                                 data, groups, (row, column), self.map_resolution, self.map_originX, self.map_originY)
-                if path != None:
-                    # Path calculated, smooth it with bspline planner
-                    publish_target_point(self, path)
-
-                    publish_groups(self, data, groups, self.map_width, self.map_height,
-                                   self.map_resolution, self.map_originX, self.map_originY, index)
-
-                    path = bspline_planning(path, len(path)*5)
-
-                    publish_path(self, path)
-
-                    self.i = 0
-                    running_state = 3
+                if retries <= 5:
+                    if self.get_new_target:
+                        # choose group and calculate path
+                        # Find the nearest group
+                        print("Search for next target...")
+                        path, index, target_point = find_closest_group(
+                            self, data, groups, self.map_resolution, self.map_originX, self.map_originY, self.odom_x, self.odom_y)
+                    else:
+                        print("Recalculate path.")
+                        path = get_path(data, self.odom_y, self.odom_x, target_point,
+                                        self.map_originY, self.map_originX, self.map_resolution)
+                    if path != None:
+                        running_state = 3
+                    else:
+                        print("No path found.")
+                        self.get_new_target = True
+                        retries += 1
+                        running_state = 1
                 else:
-                    print("No path found.")
-                    running_state = 1
-            # Navigate to target
+                    print("Too much retries...")
+                    running_state = 5
+            # Plan path
             elif running_state == 3:
+                # Path calculated, smooth it with bspline planner
+                print("Navigate to path...")
+                publish_target_point(self, path)
+
+                publish_groups(self, data, groups, self.map_width, self.map_height,
+                               self.map_resolution, self.map_originX, self.map_originY, index)
+
+                path = bspline_planning(path, len(path)*5)
+
+                publish_path(self, path)
+
+                self.i = 0
+                running_state = 4
+            # Navigate to target
+            elif running_state == 4:
                 obstacle_detected = handle_obstacles(self)
                 distance_to_target_x = abs(self.odom_x - path[-1][0])
                 distance_to_target_y = abs(self.odom_y - path[-1][1])
                 if obstacle_detected:
                     v = 0.0
                     w = 0.0
-                    running_state = 1
+                    self.get_new_target = False
+                    running_state = 2
                 # if robot near target
                 elif (distance_to_target_x < param_target_error and distance_to_target_y < param_target_error):
                     print("Target reached")
                     v = 0.0
                     w = 0.0
+                    retries = 0
+                    self.get_new_target = True
                     running_state = 1
                 else:
                     v, w, self.i = pure_pursuit(
@@ -554,7 +587,7 @@ class explorationControl(Node):
 
                 publish_cmd_vel(self, v, w)
             # Exit
-            elif running_state == 4:
+            elif running_state == 5:
                 print("Exploration finished")
                 sys.exit()
 
@@ -572,8 +605,8 @@ class explorationControl(Node):
         number_of_values = len(scan)
         increment = round(number_of_values / 16)
 
-        forward_distance = scan[0:increment] + scan[increment*15:]
-        self.scan_forward_distance = min(forward_distance)
+        # forward_distance = scan[0:increment] + scan[increment*15:]
+        # self.scan_forward_distance = min(forward_distance)
         self.scan_left_forward_distance = min(scan[increment:increment*4])
         self.scan_right_forward_distance = min(scan[increment*12:increment*15])
 

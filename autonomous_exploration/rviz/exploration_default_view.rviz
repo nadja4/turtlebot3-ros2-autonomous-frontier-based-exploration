@@ -40,7 +40,7 @@ Visualization Manager:
         Z: 0
       Plane: XY
       Plane Cell Count: 10
-      Reference Frame: <Fixed Frame>
+      Reference Frame: base_scan
       Value: true
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
@@ -233,6 +233,21 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /point_topic
       Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/PointStamped
+      Color: 28; 0; 60
+      Enabled: true
+      History Length: 1
+      Name: PointStamped
+      Radius: 0.20000000298023224
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /centroid_topic
+      Value: true
     - Alpha: 0.699999988079071
       Class: rviz_default_plugins/Map
       Color Scheme: costmap
@@ -330,7 +345,7 @@ Visualization Manager:
       Name: Current View
       Near Clip Distance: 0.009999999776482582
       Scale: 168.37916564941406
-      Target Frame: <Fixed Frame>
+      Target Frame: base_scan
       Value: TopDownOrtho (rviz_default_plugins)
       X: 0
       Y: 0
