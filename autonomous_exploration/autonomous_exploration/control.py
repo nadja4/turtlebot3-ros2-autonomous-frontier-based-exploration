@@ -169,81 +169,17 @@ def calculate_centroid(x_coords, y_coords):
     return centroid
 
 
-def heuristic(a, b):
-    return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
-
-# A*-Algorithm for path calculation
-
-
-def astar(array, start, goal):
-    neighbors = [(0, 1), (0, -1), (1, 0), (-1, 0),
-                 (1, 1), (1, -1), (-1, 1), (-1, -1)]
-    close_set = set()
-    came_from = {}
-    gscore = {start: 0}
-    fscore = {start: heuristic(start, goal)}
-    oheap = []
-    heapq.heappush(oheap, (fscore[start], start))
-    while oheap:
-        current = heapq.heappop(oheap)[1]
-        if current == goal:
-            data = []
-            while current in came_from:
-                data.append(current)
-                current = came_from[current]
-            data = data + [start]
-            data = data[::-1]
-            return data
-        close_set.add(current)
-        for i, j in neighbors:
-            neighbor = current[0] + i, current[1] + j
-            tentative_g_score = gscore[current] + heuristic(current, neighbor)
-            if 0 <= neighbor[0] < array.shape[0]:
-                if 0 <= neighbor[1] < array.shape[1]:
-                    if array[neighbor[0]][neighbor[1]] == 1:
-                        continue
-                else:
-                    # array bound y walls
-                    continue
-            else:
-                # array bound x walls
-                continue
-            if neighbor in close_set and tentative_g_score >= gscore.get(neighbor, 0):
-                continue
-            if tentative_g_score < gscore.get(neighbor, 0) or neighbor not in [i[1]for i in oheap]:
-                came_from[neighbor] = current
-                gscore[neighbor] = tentative_g_score
-                fscore[neighbor] = tentative_g_score + \
-                    heuristic(neighbor, goal)
-                heapq.heappush(oheap, (fscore[neighbor], neighbor))
-    # If no path to goal was found, return closest path to goal
-    if goal not in came_from:
-        closest_node = None
-        closest_dist = float('inf')
-        for node in close_set:
-            dist = heuristic(node, goal)
-            if dist < closest_dist:
-                closest_node = node
-                closest_dist = dist
-        if closest_node is not None:
-            data = []
-            while closest_node in came_from:
-                data.append(closest_node)
-                closest_node = came_from[closest_node]
-            data = data + [start]
-            data = data[::-1]
-            return data
-    return False
+def euclidean_distance(point1, point2):
+    return np.sqrt((point1.x - point2.x)**2 + (point1.y - point2.y)**2 + (point1.z - point2.z)**2)
 
 
 def get_path_length(path):
-    for i in range(len(path)):
-        path[i] = (path[i][0], path[i][1])
-        points = np.array(path)
-    differences = np.diff(points, axis=0)
-    distances = np.hypot(differences[:, 0], differences[:, 1])
-    total_distance = np.sum(distances)
-    return total_distance
+    path_length = 0.0
+    for i in range(1, len(path.poses)):
+        position1 = path.poses[i-1].pose.position
+        position2 = path.poses[i].pose.position
+        path_length += euclidean_distance(position1, position2)
+    return path_length
 
 
 def get_nav_path(nav, init_pose_points, goal_pose_points):
@@ -264,19 +200,14 @@ def get_nav_path(nav, init_pose_points, goal_pose_points):
     goal_pose.pose.orientation.w = 1.0
 
     path = nav.getPath(init_pose, goal_pose)
-    
+    retries = 0
+    while nav.getResult() == TaskResult.FAILED and retries < 5:
+        path = nav.getPath(init_pose, goal_pose)
+        time.sleep(0.1)
+        print("Try again...")
+        retries += 1
+
     return path, goal_pose
-
-
-def get_path(matrix, odom_y, odom_x, target, originY, originX, map_resolution):
-    row = int((odom_y - originY)/map_resolution)
-    column = int((odom_x - originX) / map_resolution)
-
-    current = (row, column)
-    path = astar(matrix, current, target)
-    path = [(p[1]*map_resolution+originX, p[0]*map_resolution+originY)
-            for p in path]
-    return path
 
 
 def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX, odomY):
@@ -298,24 +229,25 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
 
         # Calculate path to centroid/middle of the group
         path, goal_pose = get_nav_path(self.nav, (odomX, odomY),
-                            (publish_middle_x, publish_middle_y))
+                                       (publish_middle_x, publish_middle_y))
         # get_path(matrix, odomY, odomX, middle, originY, originX, resolution)
-        total_distance = len(path.poses)
-        distances.append(total_distance)
+        if path != None:
+            total_distance = get_path_length(path)
+            distances.append(total_distance)
 
-        target_points.append(goal_pose)
-        paths.append(path)
+            target_points.append(goal_pose)
+            paths.append(path)
     # score calculated paths to centroids
     for i in range(len(distances)):
         if distances[i] == 0:
-            score.append(0)
+            score.append(10000)
         else:
             points_in_group = len(groups[i][1])
-            score.append(points_in_group/distances[i])
+            score.append(distances[i])
     # select path with the best score
     for i in range(len(distances)):
-        if distances[i] > param_target_error*2:
-            if max_score_index == -1 or score[i] > score[max_score_index]:
+        if distances[i] > param_target_error*3:
+            if max_score_index == -1 or score[i] < score[max_score_index]:
                 max_score_index = i
     if max_score_index != -1:
         target_path = paths[max_score_index]
@@ -325,39 +257,12 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         index = random.randint(0, len(groups)-1)
         target_group = groups[index][1]
         target_point = target_group[random.randint(0, len(target_group)-1)]
-        target_path = get_nav_path(
-            self.nav, (odomX, odomY), target_point)
+        target_point_x = target_point[1]*resolution+originX
+        target_point_y = target_point[0]*resolution+originY
+        target_path, target_point = get_nav_path(
+            self.nav, (odomX, odomY), (target_point_x, target_point_y))
         # get_path(matrix, odomY, odomX, target_point, originY, originX, resolution)
     return target_path, max_score_index, target_point
-
-#  B-Spline-Interpolation, smooth path
-
-
-def bspline_planning(array, sn):
-    try:
-        array = np.array(array)
-        x = array[:, 0]
-        y = array[:, 1]
-        N = 2
-        t = range(len(x))
-        x_tup = si.splrep(t, x, k=N)
-        y_tup = si.splrep(t, y, k=N)
-
-        x_list = list(x_tup)
-        xl = x.tolist()
-        x_list[1] = xl + [0.0, 0.0, 0.0, 0.0]
-
-        y_list = list(y_tup)
-        yl = y.tolist()
-        y_list[1] = yl + [0.0, 0.0, 0.0, 0.0]
-
-        ipl_t = np.linspace(0.0, len(x) - 1, sn)
-        rx = si.splev(ipl_t, x_list)
-        ry = si.splev(ipl_t, y_list)
-        path = [(rx[i], ry[i]) for i in range(len(rx))]
-    except:
-        path = array
-    return path
 
 # endregion CalculateWhereToGo
 
@@ -401,19 +306,25 @@ def handle_obstacles(self):
     # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area.
     # To ensure that a new path can be planned after the robot has moved out of the obstacle area,
     # the "required distance to wall" depends on the "expansion-size".
-    required_distance_to_wall = param_expansion_size * self.map_resolution * 2
+    required_distance_to_wall = 0.4
     if self.scan_left_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front left detected, move forward slowly and turn right")
-        while self.scan_left_forward_distance <= required_distance_to_wall:
-            publish_cmd_vel(self, 0.06, -math.pi/4)
+        while self.scan_forward_distance <= required_distance_to_wall:
+            publish_cmd_vel(self, -0.06, 0.0)
             time.sleep(0.1)
             obstacle_detected = True
+        print("Turn right")
+        publish_cmd_vel(self, 0.0, -math.pi/4)
+        time.sleep(2)
     if self.scan_right_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front right detected, move forward slowly and turn left")
-        while self.scan_right_forward_distance <= required_distance_to_wall:
-            publish_cmd_vel(self, 0.06, math.pi/4)
+        while self.scan_forward_distance <= required_distance_to_wall:
+            publish_cmd_vel(self, -0.06, 0.0)
             time.sleep(0.1)
             obstacle_detected = True
+        print("Turn left")
+        publish_cmd_vel(self, 0.0, math.pi/4)
+        time.sleep(2)
     return obstacle_detected
 
 # endregion Navigation
@@ -427,6 +338,7 @@ def publish_cmd_vel(self, v, w):
     twist.angular.z = w
 
     self.publisher.publish(twist)
+    time.sleep(0.3)
 
 
 def publish_groups(self, data, groups, width, height, resolution, originX, originY, index):
@@ -479,7 +391,9 @@ def publish_target_point(self, target_point):
     point = PointStamped()
     point.header.stamp = self.get_clock().now().to_msg()
     point.header.frame_id = "map"
-    point.point = target_point.point
+    point.point.x = target_point.pose.position.x
+    point.point.y = target_point.pose.position.y
+    point.point.z = 0.0
     self.publisher_point.publish(point)
 
 
@@ -522,6 +436,7 @@ class explorationControl(Node):
         self.nav = None
 
         self.get_new_target = True
+        self.go_to_initial_pose = False
 
         print("Initialization done. Start Thread")
         # Needs thread because of While True and rclpy.spin in main
@@ -575,6 +490,7 @@ class explorationControl(Node):
                 else:
                     # no groups left, end exploration
                     print("No groups with more than 2 points found.")
+                    self.go_to_initial_pose = True
                     running_state = 5
             # Choose target, plan path
             elif running_state == 2:
@@ -587,8 +503,9 @@ class explorationControl(Node):
                             self, data, groups, self.map_resolution, self.map_originX, self.map_originY, self.odom_x, self.odom_y)
                     else:
                         print("Recalculate path.")
-                        path = get_nav_path(
-                            self.nav, (self.odom_y, self.odom_y), target_point)
+                        time.sleep(10)
+                        path, target_point = get_nav_path(
+                            self.nav, (self.odom_x, self.odom_y), (target_point.pose.position.x, target_point.pose.position.y))
                         # path = get_path(data, self.odom_y, self.odom_y, target_point,
                         #                 self.map_originY, self.map_originX, self.map_resolution)
                     if path != None:
@@ -598,6 +515,7 @@ class explorationControl(Node):
                         self.get_new_target = True
                         retries += 1
                         running_state = 1
+                        time.sleep(0.5)
                 else:
                     print("Too much retries...")
                     running_state = 5
@@ -618,29 +536,54 @@ class explorationControl(Node):
                 running_state = 4
             # Navigate to target
             elif running_state == 4:
-                # todo:
-                self.nav.goToPose(target_point)
+                obstacle_detected = handle_obstacles(self)
+                distance_to_target_x = abs(
+                    self.odom_x - path.poses[-1].pose.position.x)
+                distance_to_target_y = abs(
+                    self.odom_y - path.poses[-1].pose.position.y)
+                if obstacle_detected:
+                    v = 0.0
+                    w = 0.0
+                    # self.get_new_target = False
+                    running_state = 1
+                # if robot near target
+                elif (distance_to_target_x < param_target_error and distance_to_target_y < param_target_error):
+                    print("Target reached")
+                    v = 0.0
+                    w = 0.0
+                    retries = 0
+                    if self.go_to_initial_pose == True:
+                        print("Initial pose reached.")
+                        self.go_to_initial_pose = False
+                        running_state = 5
+                    else:
+                        self.get_new_target = True
+                        running_state = 1
+                else:
+                    v, w, self.i = pure_pursuit(
+                        self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
 
-                while not self.nav.isTaskComplete():
-                    feedback = self.nav.getFeedback()
-                    if feedback.navigation_duration > 600:
-                        self.nav.cancelTask()
-
-                    # ...
-
-                    result = self.nav.getResult()
-                    if result == TaskResult.SUCCEEDED:
-                        print('Goal succeeded!')
-                    elif result == TaskResult.CANCELED:
-                        print('Goal was canceled!')
-                    elif result == TaskResult.FAILED:
-                        print('Goal failed!')
-
-                running_state = 1
+                publish_cmd_vel(self, v, w)
             # Exit
             elif running_state == 5:
-                print("Exploration finished")
-                sys.exit()
+                print(self.go_to_initial_pose)
+                if self.go_to_initial_pose == True:
+                    print("Go to initial pose")
+                    path, target_point = get_nav_path(self.nav, (self.odom_x, self.odom_y),
+                                                      (initial_pose.pose.position.x, initial_pose.pose.position.y))
+
+                    path = self.nav.smoothPath(path)
+
+                    publish_path(self, path)
+
+                    self.i = 0
+
+                    publish_target_point(
+                        self, target_point)
+                    running_state = 4
+                else:
+                    print("Exploration finished")
+                    sys.exit()
 
             else:
                 print("Unknown running state: ", running_state)
@@ -656,8 +599,8 @@ class explorationControl(Node):
         number_of_values = len(scan)
         increment = round(number_of_values / 16)
 
-        # forward_distance = scan[0:increment] + scan[increment*15:]
-        # self.scan_forward_distance = min(forward_distance)
+        forward_distance = scan[0:increment*3] + scan[increment*12:]
+        self.scan_forward_distance = min(forward_distance)
         self.scan_left_forward_distance = min(scan[increment:increment*4])
         self.scan_right_forward_distance = min(scan[increment*12:increment*15])
 
@@ -678,6 +621,8 @@ class explorationControl(Node):
         self.odom_y = msg.pose.pose.position.y
         self.odom_yaw = euler_from_quaternion(msg.pose.pose.orientation.x, msg.pose.pose.orientation.y,
                                               msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+        self.odom_lin_vel = msg.twist.linear.x
+        self.odom_ang_vel = msg.twist.angular.z
 
 
 def signal_handler(signal, frame):
