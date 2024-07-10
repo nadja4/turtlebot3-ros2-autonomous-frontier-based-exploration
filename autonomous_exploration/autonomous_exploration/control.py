@@ -267,8 +267,22 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
 # endregion CalculateWhereToGo
 
 # region Navigation
-# Calculate the steering angle required to follow the path
 
+# Set initial pose
+
+
+def set_initial_pose(self, odom_x, odom_y, odom_yaw):
+    initial_pose = PoseStamped()
+    initial_pose.header.frame_id = 'map'
+    initial_pose.header.stamp = self.get_clock().now().to_msg()
+    initial_pose.pose.position.x = odom_x
+    initial_pose.pose.position.y = odom_y
+    initial_pose.pose.position.z = 0.0
+    initial_pose.pose.orientation.w = odom_yaw
+    self.nav.setInitialPose(initial_pose)
+
+
+# Calculate the steering angle required to follow the path
 
 def pure_pursuit(current_x, current_y, current_heading, path, index):
     closest_point = None
@@ -308,23 +322,25 @@ def handle_obstacles(self):
     # the "required distance to wall" depends on the "expansion-size".
     required_distance_to_wall = 0.4
     if self.scan_left_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle front left detected, move forward slowly and turn right")
+        print("Obstacle front left detected, move forward slowly.")
         while self.scan_forward_distance <= required_distance_to_wall:
             publish_cmd_vel(self, -0.06, 0.0)
             time.sleep(0.1)
-            obstacle_detected = True
-        print("Turn right")
-        publish_cmd_vel(self, 0.0, -math.pi/4)
-        time.sleep(2)
+        while self.scan_left_forward_distance < param_min_distance_to_obstacles-0.1:
+            print("Turn right.")
+            publish_cmd_vel(self, 0.0, -math.pi/4)
+            time.sleep(0.1)
+        obstacle_detected = True
     if self.scan_right_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle front right detected, move forward slowly and turn left")
+        print("Obstacle front right detected, move backwards slowly.")
         while self.scan_forward_distance <= required_distance_to_wall:
             publish_cmd_vel(self, -0.06, 0.0)
             time.sleep(0.1)
-            obstacle_detected = True
-        print("Turn left")
-        publish_cmd_vel(self, 0.0, math.pi/4)
-        time.sleep(2)
+        while self.scan_right_forward_distance < param_min_distance_to_obstacles-0.1:
+            print("Turn left.")
+            publish_cmd_vel(self, 0.0, math.pi/4)
+            time.sleep(0.1)
+        obstacle_detected = True
     return obstacle_detected
 
 # endregion Navigation
@@ -341,7 +357,7 @@ def publish_cmd_vel(self, v, w):
     time.sleep(0.3)
 
 
-def publish_groups(self, data, groups, width, height, resolution, originX, originY, index):
+def publish_groups(self, data, groups, width, height, resolution, originX, originY):
     map_msg = OccupancyGrid()
     map_msg.header = Header()
     map_msg.header.stamp = self.get_clock().now().to_msg()
@@ -358,10 +374,7 @@ def publish_groups(self, data, groups, width, height, resolution, originX, origi
     send_data = data * 0
     for i in range(len(groups)):
         values = groups[i][1]
-        if i == index:
-            color = 100
-        else:
-            color = 20 * i
+        color = 20 * i
         for a in range(len(values)):
             send_data[values[a][0]][values[a][1]] = color
 
@@ -460,25 +473,22 @@ class explorationControl(Node):
                     time.sleep(0.5)
                     continue
                 else:
-                    # Pose correct?
-                    initial_pose = PoseStamped()
-                    initial_pose.header.frame_id = 'map'
-                    initial_pose.header.stamp = self.get_clock().now().to_msg()
-                    initial_pose.pose.position.x = self.odom_x
-                    initial_pose.pose.position.y = self.odom_y
-                    initial_pose.pose.position.z = 0.0
-                    initial_pose.pose.orientation.w = 1.0
-                    self.nav.setInitialPose(initial_pose)
-
-                    # if autostarted, else use lifecycleStartup()
-                    # self.nav.waitUntilNav2Active()
+                    # set initial pose to use nav2 package
+                    initial_pose = set_initial_pose(
+                        self, self.odom_x, self.odom_y, self.odom_yaw)
 
                     running_state = 1
             # Prepare map
             elif running_state == 1:
                 # Data received, start exploration
-                # current position on map
 
+                # Wait until roboter stops moving
+                while (self.odom_lin_vel > 0 or self.odom_ang_vel > 0):
+                    print("Wait until roboter stops moving...")
+                    time.sleep(0.25)
+                    continue
+
+                # current position on map
                 row = int((self.odom_y - self.map_originY)/self.map_resolution)
                 column = int((self.odom_x - self.map_originX) /
                              self.map_resolution)
@@ -486,6 +496,9 @@ class explorationControl(Node):
                 data, groups = prepare_map_and_get_groups(
                     self.map_msg, row, column)
                 if len(groups) > 0:
+                    publish_groups(self, data, groups, self.map_width, self.map_height,
+                                   self.map_resolution, self.map_originX, self.map_originY)
+
                     running_state = 2
                 else:
                     # no groups left, end exploration
@@ -502,8 +515,12 @@ class explorationControl(Node):
                         path, index, target_point = find_closest_group(
                             self, data, groups, self.map_resolution, self.map_originX, self.map_originY, self.odom_x, self.odom_y)
                     else:
+                        # Wait until roboter stops moving
+                        while (self.odom_lin_vel > 0 or self.odom_ang_vel > 0):
+                            print("Wait until roboter stops moving...")
+                            time.sleep(0.25)
+                            continue
                         print("Recalculate path.")
-                        time.sleep(10)
                         path, target_point = get_nav_path(
                             self.nav, (self.odom_x, self.odom_y), (target_point.pose.position.x, target_point.pose.position.y))
                         # path = get_path(data, self.odom_y, self.odom_y, target_point,
@@ -518,15 +535,12 @@ class explorationControl(Node):
                         time.sleep(0.5)
                 else:
                     print("Too much retries...")
-                    running_state = 5
+                    running_state = 6
             # Plan path
             elif running_state == 3:
                 # Path calculated, smooth it with bspline planner
                 print("Navigate to path...")
                 publish_target_point(self, target_point)
-
-                publish_groups(self, data, groups, self.map_width, self.map_height,
-                               self.map_resolution, self.map_originX, self.map_originY, index)
 
                 path = self.nav.smoothPath(path)
 
@@ -566,7 +580,6 @@ class explorationControl(Node):
                 publish_cmd_vel(self, v, w)
             # Exit
             elif running_state == 5:
-                print(self.go_to_initial_pose)
                 if self.go_to_initial_pose == True:
                     print("Go to initial pose")
                     path, target_point = get_nav_path(self.nav, (self.odom_x, self.odom_y),
@@ -584,7 +597,9 @@ class explorationControl(Node):
                 else:
                     print("Exploration finished")
                     sys.exit()
-
+            elif running_state == 6:
+                print("Exploration failed")
+                sys.exit()
             else:
                 print("Unknown running state: ", running_state)
 
@@ -621,8 +636,8 @@ class explorationControl(Node):
         self.odom_y = msg.pose.pose.position.y
         self.odom_yaw = euler_from_quaternion(msg.pose.pose.orientation.x, msg.pose.pose.orientation.y,
                                               msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
-        self.odom_lin_vel = msg.twist.linear.x
-        self.odom_ang_vel = msg.twist.angular.z
+        self.odom_lin_vel = msg.twist.twist.linear.x
+        self.odom_ang_vel = msg.twist.twist.linear.x
 
 
 def signal_handler(signal, frame):
