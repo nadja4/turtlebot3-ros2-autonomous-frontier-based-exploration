@@ -10,12 +10,17 @@ from launch_ros.actions import Node
 
 TURTLEBOT3_MODEL = os.environ['TURTLEBOT3_MODEL']
 
+remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
+
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
 
     slam_toolbox_launchfile_dir = os.path.join(
         get_package_share_directory('slam_toolbox'), 'launch')
+
+    navigation2_launchfile_dir = os.path.join(
+        get_package_share_directory('nav2_bringup'), 'launch')
 
     rviz_config_dir = os.path.join(
         get_package_share_directory('autonomous_exploration'),
@@ -32,9 +37,15 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(
                 [slam_toolbox_launchfile_dir, '/online_async_launch.py']),
             launch_arguments={
-                # 'map': map_dir,
                 'use_sim_time': use_sim_time,
-                # 'params_file': param_dir
+            }.items(),
+        ),
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                [navigation2_launchfile_dir, '/navigation_launch.py']),
+            launch_arguments={
+                'use_sim_time': use_sim_time,
             }.items(),
         ),
 

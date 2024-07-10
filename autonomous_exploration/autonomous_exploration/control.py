@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from geometry_msgs.msg import Twist, PointStamped, PoseStamped
 from sensor_msgs.msg import LaserScan
@@ -18,6 +19,8 @@ import subprocess
 
 from rclpy.qos import qos_profile_sensor_data
 
+
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
 with open("src/turtlebot3-ros2-autonomous-frontier-based-exploration/autonomous_exploration/config/params.yaml", 'r') as file:
     params = yaml.load(file, Loader=yaml.FullLoader)
@@ -243,6 +246,28 @@ def get_path_length(path):
     return total_distance
 
 
+def get_nav_path(nav, init_pose_points, goal_pose_points):
+    init_pose = PoseStamped()
+    init_pose.header.frame_id = 'map'
+    init_pose.header.stamp = nav.get_clock().now().to_msg()
+    init_pose.pose.position.x = init_pose_points[0]
+    init_pose.pose.position.y = init_pose_points[1]
+    init_pose.pose.position.z = 0.0
+    init_pose.pose.orientation.w = 1.0
+
+    goal_pose = PoseStamped()
+    goal_pose.header.frame_id = 'map'
+    goal_pose.header.stamp = nav.get_clock().now().to_msg()
+    goal_pose.pose.position.x = goal_pose_points[0]
+    goal_pose.pose.position.y = goal_pose_points[1]
+    goal_pose.pose.position.z = 0.0
+    goal_pose.pose.orientation.w = 1.0
+
+    path = nav.getPath(init_pose, goal_pose)
+    print(path)
+    return path
+
+
 def get_path(matrix, odom_y, odom_x, target, originY, originX, map_resolution):
     row = int((odom_y - originY)/map_resolution)
     column = int((odom_x - originX) / map_resolution)
@@ -267,15 +292,16 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
                                     p[1] for p in groups[i][1]])
 
         # For debugging
-        # publish_middle_x = middle[1]*resolution+originX
-        # publish_middle_y = middle[0]*resolution+originY
+        publish_middle_x = middle[1]*resolution+originX
+        publish_middle_y = middle[0]*resolution+originY
         # publish_centroid_point(self, (publish_middle_x, publish_middle_y))
 
         # Calculate path to centroid/middle of the group
         target_points.append(middle)
-        path = get_path(matrix, odomY, odomX, middle,
-                        originY, originX, resolution)
-        total_distance = get_path_length(path)
+        path = get_nav_path(self.nav, (odomX, odomY),
+                            (publish_middle_x, publish_middle_y))
+        # get_path(matrix, odomY, odomX, middle, originY, originX, resolution)
+        total_distance = len(path.poses)
         distances.append(total_distance)
         paths.append(path)
     # score calculated paths to centroids
@@ -298,8 +324,9 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         index = random.randint(0, len(groups)-1)
         target_group = groups[index][1]
         target_point = target_group[random.randint(0, len(target_group)-1)]
-        target_path = get_path(matrix, odomY, odomX,
-                               target_point, originY, originX, resolution)
+        target_path = get_nav_path(
+            self.nav, (odomX, odomY), (middle[0], middle[1]))
+        # get_path(matrix, odomY, odomX, target_point, originY, originX, resolution)
     return target_path, max_score_index, target_point
 
 #  B-Spline-Interpolation, smooth path
@@ -340,9 +367,9 @@ def bspline_planning(array, sn):
 def pure_pursuit(current_x, current_y, current_heading, path, index):
     closest_point = None
     v = param_speed
-    for i in range(index, len(path)):
-        x = path[i][0]
-        y = path[i][1]
+    for i in range(index, len(path.poses)):
+        x = path.poses[i].pose.position.x
+        y = path.poses[i].pose.position.y
         distance = math.hypot(current_x - x, current_y - y)
         if param_lookahead_distance < distance:
             closest_point = (x, y)
@@ -354,9 +381,9 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
         desired_steering_angle = target_heading - current_heading
     else:
         target_heading = math.atan2(
-            path[-1][1] - current_y, path[-1][0] - current_x)
+            path.poses[-1].pose.position.y - current_y, path.poses[-1].pose.position.x - current_x)
         desired_steering_angle = target_heading - current_heading
-        index = len(path)-1
+        index = len(path.poses)-1
     if desired_steering_angle > math.pi:
         desired_steering_angle -= 2 * math.pi
     elif desired_steering_angle < -math.pi:
@@ -434,14 +461,15 @@ def publish_path(self, path):
     pub_path.header = Header()
     pub_path.header.stamp = self.get_clock().now().to_msg()
     pub_path.header.frame_id = "map"
+    pub_path.poses = path.poses
 
-    for i in range(len(path)):
-        pose = PoseStamped()
-        pose.pose.position.x = path[i][0]
-        pose.pose.position.y = path[i][1]
-        pose.pose.position.z = 0.0
-        pose.pose.orientation.w = 1.0
-        pub_path.poses.append(pose)
+    # for i in range(len(path)):
+    #     pose = PoseStamped()
+    #     pose.pose.position.x = path[i][0]
+    #     pose.pose.position.y = path[i][1]
+    #     pose.pose.position.z = 0.0
+    #     pose.pose.orientation.w = 1.0
+    #     pub_path.poses.append(pose)
 
     self.publisher_path.publish(pub_path)
 
@@ -450,8 +478,8 @@ def publish_target_point(self, path):
     point = PointStamped()
     point.header.stamp = self.get_clock().now().to_msg()
     point.header.frame_id = "map"
-    point.point.x = path[-1][0]
-    point.point.y = path[-1][1]
+    point.point.x = path.poses[-1].pose.position.x
+    point.point.y = path.poses[-1].pose.position.y
     point.point.z = 0.0
     self.publisher_point.publish(point)
 
@@ -466,6 +494,12 @@ def publish_centroid_point(self, middle):
     self.publisher_centroid.publish(point)
 
 # endregion RosDebuggingTopics
+
+
+class navigationControl(Node):
+    def __init__(self):
+        super().__init__('Navigation')
+        self.nav = BasicNavigator()
 
 
 class explorationControl(Node):
@@ -486,6 +520,8 @@ class explorationControl(Node):
         self.publisher_centroid = self.create_publisher(
             PointStamped, '/centroid_topic', 10)
 
+        self.nav = None
+
         self.get_new_target = True
 
         print("Initialization done. Start Thread")
@@ -493,6 +529,9 @@ class explorationControl(Node):
         t = threading.Thread(target=self.run_exploration)
         t.daemon = True  # End thread if main thread is stopped
         t.start()  # Runs the exploration function as a thread.
+
+    def set_nav_node(self, nav_node):
+        self.nav = nav_node.nav
 
     def run_exploration(self):
         # Init
@@ -507,6 +546,19 @@ class explorationControl(Node):
                     time.sleep(0.5)
                     continue
                 else:
+                    # Pose correct?
+                    initial_pose = PoseStamped()
+                    initial_pose.header.frame_id = 'map'
+                    initial_pose.header.stamp = self.get_clock().now().to_msg()
+                    initial_pose.pose.position.x = self.odom_x
+                    initial_pose.pose.position.y = self.odom_y
+                    initial_pose.pose.position.z = 0.0
+                    initial_pose.pose.orientation.w = 1.0
+                    self.nav.setInitialPose(initial_pose)
+
+                    # if autostarted, else use lifecycleStartup()
+                    # self.nav.waitUntilNav2Active()
+
                     running_state = 1
             # Prepare map
             elif running_state == 1:
@@ -536,8 +588,10 @@ class explorationControl(Node):
                             self, data, groups, self.map_resolution, self.map_originX, self.map_originY, self.odom_x, self.odom_y)
                     else:
                         print("Recalculate path.")
-                        path = get_path(data, self.odom_y, self.odom_x, target_point,
-                                        self.map_originY, self.map_originX, self.map_resolution)
+                        path = get_nav_path(
+                            self.nav, (self.odom_y, self.odom_y), target_point)
+                        # path = get_path(data, self.odom_y, self.odom_y, target_point,
+                        #                 self.map_originY, self.map_originX, self.map_resolution)
                     if path != None:
                         running_state = 3
                     else:
@@ -557,7 +611,7 @@ class explorationControl(Node):
                 publish_groups(self, data, groups, self.map_width, self.map_height,
                                self.map_resolution, self.map_originX, self.map_originY, index)
 
-                path = bspline_planning(path, len(path)*5)
+                path = self.nav.smoothPath(path)
 
                 publish_path(self, path)
 
@@ -565,25 +619,8 @@ class explorationControl(Node):
                 running_state = 4
             # Navigate to target
             elif running_state == 4:
-                obstacle_detected = handle_obstacles(self)
-                distance_to_target_x = abs(self.odom_x - path[-1][0])
-                distance_to_target_y = abs(self.odom_y - path[-1][1])
-                if obstacle_detected:
-                    v = 0.0
-                    w = 0.0
-                    self.get_new_target = False
-                    running_state = 2
-                # if robot near target
-                elif (distance_to_target_x < param_target_error and distance_to_target_y < param_target_error):
-                    print("Target reached")
-                    v = 0.0
-                    w = 0.0
-                    retries = 0
-                    self.get_new_target = True
-                    running_state = 1
-                else:
-                    v, w, self.i = pure_pursuit(
-                        self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
+                # todo:
+                self.nav.goToPose(path.poses[-1].)
 
                 publish_cmd_vel(self, v, w)
             # Exit
@@ -645,9 +682,20 @@ def main(args=None):
     signal.signal(signal.SIGINT, signal_handler)
 
     rclpy.init(args=args)
+    navigation_control = navigationControl()
     exploration_control = explorationControl()
-    rclpy.spin(exploration_control)
-    exploration_control.destroy_node()
+    exploration_control.set_nav_node(nav_node=navigation_control)
+
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(navigation_control)
+    executor.add_node(exploration_control)
+
+    # rclpy.spin(exploration_control)
+    executor.spin()
+
+    # exploration_control.destroy_node()
+    # exploration_control.destroy_node()
+
     rclpy.shutdown()
 
 
