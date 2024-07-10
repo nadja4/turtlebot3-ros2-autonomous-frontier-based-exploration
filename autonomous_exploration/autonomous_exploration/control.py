@@ -264,8 +264,8 @@ def get_nav_path(nav, init_pose_points, goal_pose_points):
     goal_pose.pose.orientation.w = 1.0
 
     path = nav.getPath(init_pose, goal_pose)
-    print(path)
-    return path
+    
+    return path, goal_pose
 
 
 def get_path(matrix, odom_y, odom_x, target, originY, originX, map_resolution):
@@ -297,12 +297,13 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         # publish_centroid_point(self, (publish_middle_x, publish_middle_y))
 
         # Calculate path to centroid/middle of the group
-        target_points.append(middle)
-        path = get_nav_path(self.nav, (odomX, odomY),
+        path, goal_pose = get_nav_path(self.nav, (odomX, odomY),
                             (publish_middle_x, publish_middle_y))
         # get_path(matrix, odomY, odomX, middle, originY, originX, resolution)
         total_distance = len(path.poses)
         distances.append(total_distance)
+
+        target_points.append(goal_pose)
         paths.append(path)
     # score calculated paths to centroids
     for i in range(len(distances)):
@@ -325,7 +326,7 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         target_group = groups[index][1]
         target_point = target_group[random.randint(0, len(target_group)-1)]
         target_path = get_nav_path(
-            self.nav, (odomX, odomY), (middle[0], middle[1]))
+            self.nav, (odomX, odomY), target_point)
         # get_path(matrix, odomY, odomX, target_point, originY, originX, resolution)
     return target_path, max_score_index, target_point
 
@@ -474,13 +475,11 @@ def publish_path(self, path):
     self.publisher_path.publish(pub_path)
 
 
-def publish_target_point(self, path):
+def publish_target_point(self, target_point):
     point = PointStamped()
     point.header.stamp = self.get_clock().now().to_msg()
     point.header.frame_id = "map"
-    point.point.x = path.poses[-1].pose.position.x
-    point.point.y = path.poses[-1].pose.position.y
-    point.point.z = 0.0
+    point.point = target_point.point
     self.publisher_point.publish(point)
 
 
@@ -606,7 +605,7 @@ class explorationControl(Node):
             elif running_state == 3:
                 # Path calculated, smooth it with bspline planner
                 print("Navigate to path...")
-                publish_target_point(self, path)
+                publish_target_point(self, target_point)
 
                 publish_groups(self, data, groups, self.map_width, self.map_height,
                                self.map_resolution, self.map_originX, self.map_originY, index)
@@ -620,9 +619,24 @@ class explorationControl(Node):
             # Navigate to target
             elif running_state == 4:
                 # todo:
-                self.nav.goToPose(path.poses[-1].)
+                self.nav.goToPose(target_point)
 
-                publish_cmd_vel(self, v, w)
+                while not self.nav.isTaskComplete():
+                    feedback = self.nav.getFeedback()
+                    if feedback.navigation_duration > 600:
+                        self.nav.cancelTask()
+
+                    # ...
+
+                    result = self.nav.getResult()
+                    if result == TaskResult.SUCCEEDED:
+                        print('Goal succeeded!')
+                    elif result == TaskResult.CANCELED:
+                        print('Goal was canceled!')
+                    elif result == TaskResult.FAILED:
+                        print('Goal failed!')
+
+                running_state = 1
             # Exit
             elif running_state == 5:
                 print("Exploration finished")
