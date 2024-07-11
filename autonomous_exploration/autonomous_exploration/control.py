@@ -281,6 +281,8 @@ def set_initial_pose(self, odom_x, odom_y, odom_yaw):
     initial_pose.pose.orientation.w = odom_yaw
     self.nav.setInitialPose(initial_pose)
 
+    return initial_pose
+
 
 # Calculate the steering angle required to follow the path
 
@@ -315,31 +317,68 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
     return v, desired_steering_angle, index
 
 
+def prepare_obstacle_handling(self):
+    publish_cmd_vel(self, 0.0, 0.0)
+    # Wait until roboter stops moving
+    while (self.odom_lin_vel > 0 or self.odom_ang_vel > 0):
+        print("Wait until roboter stops moving...")
+        time.sleep(0.25)
+        continue
+
+
 def handle_obstacles(self):
     obstacle_detected = False
     # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area.
     # To ensure that a new path can be planned after the robot has moved out of the obstacle area,
     # the "required distance to wall" depends on the "expansion-size".
     required_distance_to_wall = 0.4
-    if self.scan_left_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle front left detected, move forward slowly.")
-        while self.scan_forward_distance <= required_distance_to_wall:
-            publish_cmd_vel(self, -0.06, 0.0)
+    if self.scan_forward_distance < param_min_distance_to_obstacles:
+        print("Obstacle front detected, move backwards slowly.")
+        prepare_obstacle_handling(self)
+        self.nav.backup(backup_dist=0.25, backup_speed=0.05,
+                        time_allowance=10)
+        while not self.nav.isTaskComplete():
+            print("move backwards")
             time.sleep(0.1)
-        while self.scan_left_forward_distance < param_min_distance_to_obstacles-0.1:
-            print("Turn right.")
-            publish_cmd_vel(self, 0.0, -math.pi/4)
+        print("Moved backwards.")
+        # turn 90 Degree
+        self.nav.spin(spin_dist=1.57, time_allowance=10)
+        while not self.nav.isTaskComplete():
+            print("Turn around")
             time.sleep(0.1)
+        print("Turned around.")
         obstacle_detected = True
-    if self.scan_right_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle front right detected, move backwards slowly.")
-        while self.scan_forward_distance <= required_distance_to_wall:
-            publish_cmd_vel(self, -0.06, 0.0)
+    elif self.scan_left_forward_distance < param_min_distance_to_obstacles:
+        print("Obstacle front left detected, move forward slowly and turn right.")
+        prepare_obstacle_handling(self)
+        self.nav.backup(backup_dist=0.25, backup_speed=0.05,
+                        time_allowance=10)
+        while not self.nav.isTaskComplete():
+            print("move backwards")
             time.sleep(0.1)
-        while self.scan_right_forward_distance < param_min_distance_to_obstacles-0.1:
-            print("Turn left.")
-            publish_cmd_vel(self, 0.0, math.pi/4)
+        # turn -90 Degree
+        print("Moved backwards.")
+        self.nav.spin(spin_dist=-1.57, time_allowance=10)
+        while not self.nav.isTaskComplete():
+            print("Turn around")
             time.sleep(0.1)
+        print("Turned around.")
+        obstacle_detected = True
+    elif self.scan_right_forward_distance < param_min_distance_to_obstacles:
+        print("Obstacle front right detected, move forward slowly and turn left.")
+        prepare_obstacle_handling(self)
+        self.nav.backup(backup_dist=0.25, backup_speed=0.05,
+                        time_allowance=10)
+        while not self.nav.isTaskComplete():
+            print("move backwards")
+            time.sleep(0.1)
+        print("Moved backwards.")
+        # turn 90 Degree
+        self.nav.spin(spin_dist=1.57, time_allowance=10)
+        while not self.nav.isTaskComplete():
+            print("Turn around")
+            time.sleep(0.1)
+        print("Turned around.")
         obstacle_detected = True
     return obstacle_detected
 
@@ -388,14 +427,6 @@ def publish_path(self, path):
     pub_path.header.stamp = self.get_clock().now().to_msg()
     pub_path.header.frame_id = "map"
     pub_path.poses = path.poses
-
-    # for i in range(len(path)):
-    #     pose = PoseStamped()
-    #     pose.pose.position.x = path[i][0]
-    #     pose.pose.position.y = path[i][1]
-    #     pose.pose.position.z = 0.0
-    #     pose.pose.orientation.w = 1.0
-    #     pub_path.poses.append(pose)
 
     self.publisher_path.publish(pub_path)
 
@@ -523,8 +554,6 @@ class explorationControl(Node):
                         print("Recalculate path.")
                         path, target_point = get_nav_path(
                             self.nav, (self.odom_x, self.odom_y), (target_point.pose.position.x, target_point.pose.position.y))
-                        # path = get_path(data, self.odom_y, self.odom_y, target_point,
-                        #                 self.map_originY, self.map_originX, self.map_resolution)
                     if path != None:
                         running_state = 3
                     else:
@@ -556,6 +585,7 @@ class explorationControl(Node):
                 distance_to_target_y = abs(
                     self.odom_y - path.poses[-1].pose.position.y)
                 if obstacle_detected:
+                    print()
                     v = 0.0
                     w = 0.0
                     # self.get_new_target = False
