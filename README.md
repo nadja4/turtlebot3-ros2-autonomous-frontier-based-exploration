@@ -87,6 +87,11 @@ ros2 run autonomous_exploration control
 ```
 This will start the robot's autonomous exploration.
 
+You can choose the logging information with
+```
+ros2 run autonomous_exploration control --ros-args --log-level <log-level> (e.g. warn)
+```
+
 ## Requirements
 
 - [ROS2 - Humble](https://docs.ros.org/en/humble/Installation.html)
