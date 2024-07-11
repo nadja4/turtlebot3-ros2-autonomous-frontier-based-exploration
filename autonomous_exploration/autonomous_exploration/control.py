@@ -19,7 +19,6 @@ import subprocess
 
 from rclpy.qos import qos_profile_sensor_data
 
-
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
 with open("src/turtlebot3-ros2-autonomous-frontier-based-exploration/autonomous_exploration/config/params.yaml", 'r') as file:
@@ -189,7 +188,11 @@ def get_nav_path(nav, init_pose_points, goal_pose_points):
     init_pose.pose.position.x = init_pose_points[0]
     init_pose.pose.position.y = init_pose_points[1]
     init_pose.pose.position.z = init_pose_points[2]
-    init_pose.pose.orientation.w = init_pose_points[3]
+
+    init_pose.pose.orientation.x = init_pose_points[3]
+    init_pose.pose.orientation.y = init_pose_points[4]
+    init_pose.pose.orientation.z = init_pose_points[5]
+    init_pose.pose.orientation.w = init_pose_points[6]
 
     goal_pose = PoseStamped()
     goal_pose.header.frame_id = 'map'
@@ -210,7 +213,7 @@ def get_nav_path(nav, init_pose_points, goal_pose_points):
     return path, goal_pose
 
 
-def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX, odomY, odomZ, odomW):
+def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX, odomY, odomZ, odom_or_x, odom_or_y, odom_or_z, odom_or_w):
     target_path = None
     target_point = None
     distances = []
@@ -228,7 +231,7 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         # publish_centroid_point(self, (publish_middle_x, publish_middle_y))
 
         # Calculate path to centroid/middle of the group
-        path, goal_pose = get_nav_path(self.nav, (odomX, odomY, odomZ, odomW),
+        path, goal_pose = get_nav_path(self.nav, (odomX, odomY, odomZ, odom_or_x, odom_or_y, odom_or_z, odom_or_w),
                                        (publish_middle_x, publish_middle_y))
         # get_path(matrix, odomY, odomX, middle, originY, originX, resolution)
         if path != None:
@@ -260,7 +263,7 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         target_point_x = target_point[1]*resolution+originX
         target_point_y = target_point[0]*resolution+originY
         target_path, target_point = get_nav_path(
-            self.nav, (odomX, odomY, odomZ, odomW), (target_point_x, target_point_y))
+            self.nav, (odomX, odomY, odomZ, odom_or_x, odom_or_y, odom_or_z, odom_or_w), (target_point_x, target_point_y))
         # get_path(matrix, odomY, odomX, target_point, originY, originX, resolution)
     return target_path, max_score_index, target_point
 
@@ -271,14 +274,19 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
 # Set initial pose
 
 
-def set_initial_pose(self, odom_x, odom_y, odom_yaw):
+def set_initial_pose(self, odom_x, odom_y, odom_z, odom_or_x, odom_or_y, odom_or_z, odom_or_w):
     initial_pose = PoseStamped()
     initial_pose.header.frame_id = 'map'
     initial_pose.header.stamp = self.get_clock().now().to_msg()
     initial_pose.pose.position.x = odom_x
     initial_pose.pose.position.y = odom_y
-    initial_pose.pose.position.z = 0.0
-    initial_pose.pose.orientation.w = odom_yaw
+    initial_pose.pose.position.z = odom_z
+
+    initial_pose.pose.orientation.w = odom_or_x
+    initial_pose.pose.orientation.w = odom_or_y
+    initial_pose.pose.orientation.w = odom_or_z
+    initial_pose.pose.orientation.w = odom_or_w
+
     self.nav.setInitialPose(initial_pose)
 
     return initial_pose
@@ -289,31 +297,40 @@ def set_initial_pose(self, odom_x, odom_y, odom_yaw):
 def pure_pursuit(current_x, current_y, current_heading, path, index):
     closest_point = None
     v = param_speed
+
+    # Find the next point on the path that is at least the lookahead distance away
     for i in range(index, len(path.poses)):
         x = path.poses[i].pose.position.x
         y = path.poses[i].pose.position.y
         distance = math.hypot(current_x - x, current_y - y)
-        if param_lookahead_distance < distance:
+        if distance > param_lookahead_distance:
             closest_point = (x, y)
             index = i
             break
+
     if closest_point is not None:
         target_heading = math.atan2(
             closest_point[1] - current_y, closest_point[0] - current_x)
-        desired_steering_angle = target_heading - current_heading
     else:
+        # If no point is found, use the last target on the path
         target_heading = math.atan2(
             path.poses[-1].pose.position.y - current_y, path.poses[-1].pose.position.x - current_x)
-        desired_steering_angle = target_heading - current_heading
-        index = len(path.poses)-1
-    if desired_steering_angle > math.pi:
-        desired_steering_angle -= 2 * math.pi
-    elif desired_steering_angle < -math.pi:
-        desired_steering_angle += 2 * math.pi
-    if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
-        sign = 1 if desired_steering_angle > 0 else -1
-        desired_steering_angle = sign * math.pi/4
+        index = len(path.poses) - 1
+
+    # Calculate the desired steering angle
+    desired_steering_angle = target_heading - current_heading
+
+    # Normalize the steering angle to the range [-pi, pi]
+    desired_steering_angle = (
+        desired_steering_angle + math.pi) % (2 * math.pi) - math.pi
+
+    # Limit the steering angle smoothly
+    max_steering_angle = math.pi / 4  # 45 degrees
+    if abs(desired_steering_angle) > max_steering_angle:
+        desired_steering_angle = max_steering_angle * \
+            (desired_steering_angle / abs(desired_steering_angle))
         v = 0.0
+
     return v, desired_steering_angle, index
 
 
@@ -329,8 +346,8 @@ def prepare_obstacle_handling(self):
 def move_backwards(self, distance, speed):
     prepare_obstacle_handling(self)
 
-    self.initial_x = self.odom_x
-    self.initial_y = self.odom_y
+    initial_x = self.odom_x
+    initial_y = self.odom_y
 
     # Get the current time
     total_seconds = time.time()
@@ -343,55 +360,49 @@ def move_backwards(self, distance, speed):
 
         total_seconds = time.time()
 
-        dx = self.odom_x - self.initial_x
-        dy = self.odom_y - self.initial_y
+        dx = self.odom_x - initial_x
+        dy = self.odom_y - initial_y
         distance_moved = (dx**2 + dy**2)**0.5
-        print("move backwards", distance_moved, total_seconds, start_time+20)
 
         time.sleep(0.01)
 
     prepare_obstacle_handling(self)
 
 
-def handle_obstacles(self):
+def handle_obstacles(self, w):
     obstacle_detected = False
     # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area.
     # To ensure that a new path can be planned after the robot has moved out of the obstacle area,
     # the "required distance to wall" depends on the "expansion-size".
-    required_distance_to_wall = 0.4
     if self.scan_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle front detected, move backwards slowly.")
+        print("Obstacle in front detected, move backwards slowly.")
         move_backwards(self, 0.25, 0.05)
-        # turn 90 Degree
-        self.nav.spin(spin_dist=2.0, time_allowance=10)
+        # turn more than 90 Degree
+        self.nav.spin(spin_dist=w*1.1, time_allowance=10)
         while not self.nav.isTaskComplete():
             print("Turn around")
             time.sleep(0.1)
         print("Turned around.")
-        time.sleep(0.1)
         obstacle_detected = True
     elif self.scan_left_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front left detected, move forward slowly and turn right.")
         move_backwards(self, 0.25, 0.05)
         # turn -90 Degree
-        print("Moved backwards.")
-        self.nav.spin(spin_dist=-1.57, time_allowance=10)
+        self.nav.spin(spin_dist=w*1.1, time_allowance=10)
         while not self.nav.isTaskComplete():
             print("Turn around")
             time.sleep(0.1)
         print("Turned around.")
-        time.sleep(0.1)
         obstacle_detected = True
     elif self.scan_right_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front right detected, move forward slowly and turn left.")
         move_backwards(self, 0.25, 0.05)
         # turn 90 Degree
-        self.nav.spin(spin_dist=1.57, time_allowance=10)
+        self.nav.spin(spin_dist=w*1.1, time_allowance=10)
         while not self.nav.isTaskComplete():
             print("Turn around")
             time.sleep(0.1)
         print("Turned around.")
-        time.sleep(0.1)
         obstacle_detected = True
     return obstacle_detected
 
@@ -406,7 +417,6 @@ def publish_cmd_vel(self, v, w):
     twist.angular.z = w
 
     self.publisher.publish(twist)
-    time.sleep(0.3)
 
 
 def publish_groups(self, data, groups, width, height, resolution, originX, originY):
@@ -492,7 +502,6 @@ class explorationControl(Node):
 
         self.nav = None
 
-        self.get_new_target = True
         self.go_to_initial_pose = False
 
         print("Initialization done. Start Thread")
@@ -519,7 +528,7 @@ class explorationControl(Node):
                 else:
                     # set initial pose to use nav2 package
                     initial_pose = set_initial_pose(
-                        self, self.odom_x, self.odom_y, self.odom_yaw)
+                        self, self.odom_x, self.odom_y, self.odom_z, self.odom_orientation_x, self.odom_orientation_y, self.odom_orientation_z, self.odom_orientation_w)
 
                     running_state = 1
             # Prepare map
@@ -527,7 +536,7 @@ class explorationControl(Node):
                 # Data received, start exploration
 
                 # Wait until roboter stops moving
-                while (self.odom_lin_vel != 0 or self.odom_ang_vel != 0):
+                while (self.odom_lin_vel != 0):
                     print("Wait until roboter stops moving...")
                     time.sleep(0.25)
                     continue
@@ -553,26 +562,15 @@ class explorationControl(Node):
             # Choose target, plan path
             elif running_state == 2:
                 if retries <= 5:
-                    if self.get_new_target:
-                        # choose group and calculate path
-                        # Find the nearest group
-                        print("Search for next target...")
-                        path, index, target_point = find_closest_group(
-                            self, data, groups, self.map_resolution, self.map_originX, self.map_originY, self.odom_x, self.odom_y, self.odom_z, self.odom_orientation_w)
-                    # else:
-                    #     # Wait until roboter stops moving
-                    #     while (self.odom_lin_vel > 0 or self.odom_ang_vel > 0):
-                    #         print("Wait until roboter stops moving...")
-                    #         time.sleep(0.25)
-                    #         continue
-                    #     print("Recalculate path.")
-                    #     path, target_point = get_nav_path(
-                    #         self.nav, (self.odom_x, self.odom_y), (target_point.pose.position.x, target_point.pose.position.y))
+                    # choose group and calculate path
+                    # Find the nearest group
+                    print("Search for next target...")
+                    path, index, target_point = find_closest_group(
+                        self, data, groups, self.map_resolution, self.map_originX, self.map_originY, self.odom_x, self.odom_y, self.odom_z, self.odom_orientation_x, self.odom_orientation_y, self.odom_orientation_z, self.odom_orientation_w)
                     if path != None:
                         running_state = 3
                     else:
                         print("No path found.")
-                        self.get_new_target = True
                         retries += 1
                         running_state = 1
                         time.sleep(0.5)
@@ -589,21 +587,27 @@ class explorationControl(Node):
 
                 publish_path(self, path)
 
+                # Debugging proposes
+                time.sleep(2)
+
                 self.i = 0
                 running_state = 4
             # Navigate to target
             elif running_state == 4:
-                obstacle_detected = handle_obstacles(self)
+                v, w, self.i = pure_pursuit(
+                    self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
+
+                obstacle_detected = handle_obstacles(self, w)
                 distance_to_target_x = abs(
                     self.odom_x - path.poses[-1].pose.position.x)
                 distance_to_target_y = abs(
                     self.odom_y - path.poses[-1].pose.position.y)
                 if obstacle_detected:
-                    print()
                     v = 0.0
                     w = 0.0
-                    # self.get_new_target = False
+
                     running_state = 1
+                    time.sleep(1)
                 # if robot near target
                 elif (distance_to_target_x < param_target_error and distance_to_target_y < param_target_error):
                     print("Target reached")
@@ -615,33 +619,37 @@ class explorationControl(Node):
                         self.go_to_initial_pose = False
                         running_state = 5
                     else:
-                        self.get_new_target = True
                         running_state = 1
-                else:
-                    v, w, self.i = pure_pursuit(
-                        self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
+                # else:
+                #     v, w, self.i = pure_pursuit(
+                #         self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
 
                 publish_cmd_vel(self, v, w)
             # Exit
             elif running_state == 5:
                 if self.go_to_initial_pose == True:
                     print("Go to initial pose")
-                    path, target_point = get_nav_path(self.nav, (self.odom_x, self.odom_y, self.odom_z, self.odom_orientation_w),
+                    path, target_point = get_nav_path(self.nav, (self.odom_x, self.odom_y, self.odom_z, self.odom_orientation_x, self.odom_orientation_y, self.odom_orientation_z, self.odom_orientation_w),
                                                       (initial_pose.pose.position.x, initial_pose.pose.position.y))
+                    if path != None:
+                        path = self.nav.smoothPath(path)
 
-                    path = self.nav.smoothPath(path)
+                        publish_path(self, path)
 
-                    publish_path(self, path)
+                        time.sleep(2)
 
-                    self.i = 0
+                        self.i = 0
 
-                    publish_target_point(
-                        self, target_point)
-                    running_state = 4
+                        publish_target_point(
+                            self, target_point)
+                        running_state = 4
+                    else:
+                        running_state = 6
                 else:
                     empty_path = Path()
                     publish_path(self, empty_path)
 
+                    print("⠀⠀   ⠀⠀⣠⣿⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⣿⣄⠀⠀⠀⠀⠀⠀⠀\n⠀⠀⠀⠀⢀⡔⢺⣿⣿⣿⡄⠀⠀⠀⠀⠀⠀⠀⠀⢀⣿⣿⣿⡗⠢⡀⠀⠀⠀⠀\n⠀⠀⠀⠀⠀⢷⣶⡟⠉⢻⣷⡀⠀⠀⠀⠀⠀⠀⠀⣾⡿⠉⢻⣶⡾⠁⠀⠀⠀⠀\n⣠⣤⣴⠖⠒⠹⣿⣷⣀⣸⣿⣧⠀⠀⠀⠀⠀⠀⣸⣿⣇⣀⣾⣿⠏⠒⠲⣶⣤⣄\n⢹⣿⣿⡄⠀⣀⡝⠁⠘⣿⣿⣿⡆⠀⠀⠀⠀⢠⣿⣿⣿⠏⠈⢻⣀⠀⢠⣿⣿⡏\n⠀⢃⠀⠘⣿⣿⣿⣄⣠⡟⠉⢿⣿⡀⠀⠀⠀⣾⡿⠉⢹⣄⣀⣿⣿⣿⠃⠀⡸⠀\n⠀⠈⣦⣴⣾⠉⠁⠈⣿⣷⠀⠈⣿⣷⠀⠀⣼⣿⠃⠀⣾⣿⠃⠈⠉⣹⣦⣴⠁⠀\n⠀⠀⠸⣿⣿⡦⠤⠐⠋⠁⠀⠀⠸⣿⣇⢰⣿⡏⠀⠀⠈⠙⠂⠤⢴⣿⣿⠇⠀⠀\n⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣿⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢿⡿⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
                     print("Exploration finished")
                     sys.exit()
             elif running_state == 6:
@@ -683,6 +691,8 @@ class explorationControl(Node):
         self.odom_y = msg.pose.pose.position.y
         self.odom_z = msg.pose.pose.position.z
 
+        self.odom_orientation_x = msg.pose.pose.orientation.x
+        self.odom_orientation_y = msg.pose.pose.orientation.y
         self.odom_orientation_w = msg.pose.pose.orientation.w
         self.odom_orientation_z = msg.pose.pose.orientation.z
 
