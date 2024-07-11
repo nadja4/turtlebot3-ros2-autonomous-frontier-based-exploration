@@ -225,15 +225,14 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         middle = calculate_centroid([p[0] for p in groups[i][1]], [
                                     p[1] for p in groups[i][1]])
 
-        # For debugging
         publish_middle_x = middle[1]*resolution+originX
         publish_middle_y = middle[0]*resolution+originY
+        # For debugging
         # publish_centroid_point(self, (publish_middle_x, publish_middle_y))
 
         # Calculate path to centroid/middle of the group
         path, goal_pose = get_nav_path(self.nav, (odomX, odomY, odomZ, odom_or_x, odom_or_y, odom_or_z, odom_or_w),
                                        (publish_middle_x, publish_middle_y))
-        # get_path(matrix, odomY, odomX, middle, originY, originX, resolution)
         if path != None:
             total_distance = get_path_length(path)
             distances.append(total_distance)
@@ -264,7 +263,6 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         target_point_y = target_point[0]*resolution+originY
         target_path, target_point = get_nav_path(
             self.nav, (odomX, odomY, odomZ, odom_or_x, odom_or_y, odom_or_z, odom_or_w), (target_point_x, target_point_y))
-        # get_path(matrix, odomY, odomX, target_point, originY, originX, resolution)
     return target_path, max_score_index, target_point
 
 # endregion CalculateWhereToGo
@@ -375,30 +373,10 @@ def handle_obstacles(self, w):
     # To ensure that a new path can be planned after the robot has moved out of the obstacle area,
     # the "required distance to wall" depends on the "expansion-size".
     if self.scan_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle in front detected, move backwards slowly.")
-        move_backwards(self, 0.25, 0.05)
+        print("Obstacle in front detected, turn around.")
+        move_backwards(self, 0.1, 0.05)
         # turn more than 90 Degree
-        self.nav.spin(spin_dist=w*1.1, time_allowance=10)
-        while not self.nav.isTaskComplete():
-            print("Turn around")
-            time.sleep(0.1)
-        print("Turned around.")
-        obstacle_detected = True
-    elif self.scan_left_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle front left detected, move forward slowly and turn right.")
-        move_backwards(self, 0.25, 0.05)
-        # turn -90 Degree
-        self.nav.spin(spin_dist=w*1.1, time_allowance=10)
-        while not self.nav.isTaskComplete():
-            print("Turn around")
-            time.sleep(0.1)
-        print("Turned around.")
-        obstacle_detected = True
-    elif self.scan_right_forward_distance < param_min_distance_to_obstacles:
-        print("Obstacle front right detected, move forward slowly and turn left.")
-        move_backwards(self, 0.25, 0.05)
-        # turn 90 Degree
-        self.nav.spin(spin_dist=w*1.1, time_allowance=10)
+        self.nav.spin(spin_dist=w, time_allowance=10)
         while not self.nav.isTaskComplete():
             print("Turn around")
             time.sleep(0.1)
@@ -620,9 +598,6 @@ class explorationControl(Node):
                         running_state = 5
                     else:
                         running_state = 1
-                # else:
-                #     v, w, self.i = pure_pursuit(
-                #         self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
 
                 publish_cmd_vel(self, v, w)
             # Exit
