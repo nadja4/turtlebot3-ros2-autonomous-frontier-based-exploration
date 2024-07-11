@@ -188,8 +188,8 @@ def get_nav_path(nav, init_pose_points, goal_pose_points):
     init_pose.header.stamp = nav.get_clock().now().to_msg()
     init_pose.pose.position.x = init_pose_points[0]
     init_pose.pose.position.y = init_pose_points[1]
-    init_pose.pose.position.z = 0.0
-    init_pose.pose.orientation.w = 1.0
+    init_pose.pose.position.z = init_pose_points[2]
+    init_pose.pose.orientation.w = init_pose_points[3]
 
     goal_pose = PoseStamped()
     goal_pose.header.frame_id = 'map'
@@ -210,7 +210,7 @@ def get_nav_path(nav, init_pose_points, goal_pose_points):
     return path, goal_pose
 
 
-def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX, odomY):
+def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX, odomY, odomZ, odomW):
     target_path = None
     target_point = None
     distances = []
@@ -228,7 +228,7 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         # publish_centroid_point(self, (publish_middle_x, publish_middle_y))
 
         # Calculate path to centroid/middle of the group
-        path, goal_pose = get_nav_path(self.nav, (odomX, odomY),
+        path, goal_pose = get_nav_path(self.nav, (odomX, odomY, odomZ, odomW),
                                        (publish_middle_x, publish_middle_y))
         # get_path(matrix, odomY, odomX, middle, originY, originX, resolution)
         if path != None:
@@ -260,7 +260,7 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
         target_point_x = target_point[1]*resolution+originX
         target_point_y = target_point[0]*resolution+originY
         target_path, target_point = get_nav_path(
-            self.nav, (odomX, odomY), (target_point_x, target_point_y))
+            self.nav, (odomX, odomY, odomZ, odomW), (target_point_x, target_point_y))
         # get_path(matrix, odomY, odomX, target_point, originY, originX, resolution)
     return target_path, max_score_index, target_point
 
@@ -320,10 +320,37 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
 def prepare_obstacle_handling(self):
     publish_cmd_vel(self, 0.0, 0.0)
     # Wait until roboter stops moving
-    while (self.odom_lin_vel > 0 or self.odom_ang_vel > 0):
+    while (self.odom_lin_vel > 0):
         print("Wait until roboter stops moving...")
         time.sleep(0.25)
         continue
+
+
+def move_backwards(self, distance, speed):
+    prepare_obstacle_handling(self)
+
+    self.initial_x = self.odom_x
+    self.initial_y = self.odom_y
+
+    # Get the current time
+    total_seconds = time.time()
+    start_time = total_seconds
+    distance_moved = 0
+
+    publish_cmd_vel(self, -speed, 0.0)
+
+    while (total_seconds < start_time + 20) and (distance_moved < distance):
+
+        total_seconds = time.time()
+
+        dx = self.odom_x - self.initial_x
+        dy = self.odom_y - self.initial_y
+        distance_moved = (dx**2 + dy**2)**0.5
+        print("move backwards", distance_moved, total_seconds, start_time+20)
+
+        time.sleep(0.01)
+
+    prepare_obstacle_handling(self)
 
 
 def handle_obstacles(self):
@@ -334,28 +361,18 @@ def handle_obstacles(self):
     required_distance_to_wall = 0.4
     if self.scan_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front detected, move backwards slowly.")
-        prepare_obstacle_handling(self)
-        self.nav.backup(backup_dist=0.25, backup_speed=0.05,
-                        time_allowance=10)
-        while not self.nav.isTaskComplete():
-            print("move backwards")
-            time.sleep(0.1)
-        print("Moved backwards.")
+        move_backwards(self, 0.25, 0.05)
         # turn 90 Degree
-        self.nav.spin(spin_dist=1.57, time_allowance=10)
+        self.nav.spin(spin_dist=2.0, time_allowance=10)
         while not self.nav.isTaskComplete():
             print("Turn around")
             time.sleep(0.1)
         print("Turned around.")
+        time.sleep(0.1)
         obstacle_detected = True
     elif self.scan_left_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front left detected, move forward slowly and turn right.")
-        prepare_obstacle_handling(self)
-        self.nav.backup(backup_dist=0.25, backup_speed=0.05,
-                        time_allowance=10)
-        while not self.nav.isTaskComplete():
-            print("move backwards")
-            time.sleep(0.1)
+        move_backwards(self, 0.25, 0.05)
         # turn -90 Degree
         print("Moved backwards.")
         self.nav.spin(spin_dist=-1.57, time_allowance=10)
@@ -363,22 +380,18 @@ def handle_obstacles(self):
             print("Turn around")
             time.sleep(0.1)
         print("Turned around.")
+        time.sleep(0.1)
         obstacle_detected = True
     elif self.scan_right_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle front right detected, move forward slowly and turn left.")
-        prepare_obstacle_handling(self)
-        self.nav.backup(backup_dist=0.25, backup_speed=0.05,
-                        time_allowance=10)
-        while not self.nav.isTaskComplete():
-            print("move backwards")
-            time.sleep(0.1)
-        print("Moved backwards.")
+        move_backwards(self, 0.25, 0.05)
         # turn 90 Degree
         self.nav.spin(spin_dist=1.57, time_allowance=10)
         while not self.nav.isTaskComplete():
             print("Turn around")
             time.sleep(0.1)
         print("Turned around.")
+        time.sleep(0.1)
         obstacle_detected = True
     return obstacle_detected
 
@@ -413,7 +426,7 @@ def publish_groups(self, data, groups, width, height, resolution, originX, origi
     send_data = data * 0
     for i in range(len(groups)):
         values = groups[i][1]
-        color = 20 * i
+        color = 100 - 20 * i
         for a in range(len(values)):
             send_data[values[a][0]][values[a][1]] = color
 
@@ -514,7 +527,7 @@ class explorationControl(Node):
                 # Data received, start exploration
 
                 # Wait until roboter stops moving
-                while (self.odom_lin_vel > 0 or self.odom_ang_vel > 0):
+                while (self.odom_lin_vel != 0 or self.odom_ang_vel != 0):
                     print("Wait until roboter stops moving...")
                     time.sleep(0.25)
                     continue
@@ -526,10 +539,11 @@ class explorationControl(Node):
 
                 data, groups = prepare_map_and_get_groups(
                     self.map_msg, row, column)
-                if len(groups) > 0:
-                    publish_groups(self, data, groups, self.map_width, self.map_height,
-                                   self.map_resolution, self.map_originX, self.map_originY)
 
+                publish_groups(self, data, groups, self.map_width, self.map_height,
+                               self.map_resolution, self.map_originX, self.map_originY)
+
+                if len(groups) > 0:
                     running_state = 2
                 else:
                     # no groups left, end exploration
@@ -544,16 +558,16 @@ class explorationControl(Node):
                         # Find the nearest group
                         print("Search for next target...")
                         path, index, target_point = find_closest_group(
-                            self, data, groups, self.map_resolution, self.map_originX, self.map_originY, self.odom_x, self.odom_y)
-                    else:
-                        # Wait until roboter stops moving
-                        while (self.odom_lin_vel > 0 or self.odom_ang_vel > 0):
-                            print("Wait until roboter stops moving...")
-                            time.sleep(0.25)
-                            continue
-                        print("Recalculate path.")
-                        path, target_point = get_nav_path(
-                            self.nav, (self.odom_x, self.odom_y), (target_point.pose.position.x, target_point.pose.position.y))
+                            self, data, groups, self.map_resolution, self.map_originX, self.map_originY, self.odom_x, self.odom_y, self.odom_z, self.odom_orientation_w)
+                    # else:
+                    #     # Wait until roboter stops moving
+                    #     while (self.odom_lin_vel > 0 or self.odom_ang_vel > 0):
+                    #         print("Wait until roboter stops moving...")
+                    #         time.sleep(0.25)
+                    #         continue
+                    #     print("Recalculate path.")
+                    #     path, target_point = get_nav_path(
+                    #         self.nav, (self.odom_x, self.odom_y), (target_point.pose.position.x, target_point.pose.position.y))
                     if path != None:
                         running_state = 3
                     else:
@@ -612,7 +626,7 @@ class explorationControl(Node):
             elif running_state == 5:
                 if self.go_to_initial_pose == True:
                     print("Go to initial pose")
-                    path, target_point = get_nav_path(self.nav, (self.odom_x, self.odom_y),
+                    path, target_point = get_nav_path(self.nav, (self.odom_x, self.odom_y, self.odom_z, self.odom_orientation_w),
                                                       (initial_pose.pose.position.x, initial_pose.pose.position.y))
 
                     path = self.nav.smoothPath(path)
@@ -625,6 +639,9 @@ class explorationControl(Node):
                         self, target_point)
                     running_state = 4
                 else:
+                    empty_path = Path()
+                    publish_path(self, empty_path)
+
                     print("Exploration finished")
                     sys.exit()
             elif running_state == 6:
@@ -664,10 +681,14 @@ class explorationControl(Node):
         self.odom_msg = msg
         self.odom_x = msg.pose.pose.position.x
         self.odom_y = msg.pose.pose.position.y
+        self.odom_z = msg.pose.pose.position.z
+
+        self.odom_orientation_w = msg.pose.pose.orientation.w
+        self.odom_orientation_z = msg.pose.pose.orientation.z
+
         self.odom_yaw = euler_from_quaternion(msg.pose.pose.orientation.x, msg.pose.pose.orientation.y,
                                               msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
         self.odom_lin_vel = msg.twist.twist.linear.x
-        self.odom_ang_vel = msg.twist.twist.linear.x
 
 
 def signal_handler(signal, frame):

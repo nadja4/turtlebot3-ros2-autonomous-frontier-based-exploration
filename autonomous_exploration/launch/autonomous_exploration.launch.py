@@ -27,6 +27,9 @@ def generate_launch_description():
         'rviz',
         'exploration_default_view.rviz')
 
+    params_file_dir = os.path.join(get_package_share_directory(
+        'autonomous_exploration'), 'config', 'nav2_params.yaml')
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'use_sim_time',
@@ -35,15 +38,16 @@ def generate_launch_description():
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                [slam_toolbox_launchfile_dir, '/online_async_launch.py']),
+                [navigation2_launchfile_dir, '/navigation_launch.py']),
             launch_arguments={
                 'use_sim_time': use_sim_time,
+                'params_file': params_file_dir,
             }.items(),
         ),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                [navigation2_launchfile_dir, '/navigation_launch.py']),
+                [slam_toolbox_launchfile_dir, '/online_async_launch.py']),
             launch_arguments={
                 'use_sim_time': use_sim_time,
             }.items(),
