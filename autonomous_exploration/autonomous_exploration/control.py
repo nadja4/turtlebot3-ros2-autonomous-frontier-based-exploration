@@ -46,6 +46,22 @@ def euler_from_quaternion(x, y, z, w):
     t4 = +1.0 - 2.0 * (y * y + z * z)
     yaw_z = math.atan2(t3, t4)
     return yaw_z
+
+
+def euler_to_quaternion(roll, pitch, yaw):
+    """
+    Convert Euler angles (roll, pitch, yaw) to a quaternion (x, y, z, w).
+    """
+    qx = math.sin(roll / 2) * math.cos(pitch / 2) * math.cos(yaw / 2) - \
+        math.cos(roll / 2) * math.sin(pitch / 2) * math.sin(yaw / 2)
+    qy = math.cos(roll / 2) * math.sin(pitch / 2) * math.cos(yaw / 2) + \
+        math.sin(roll / 2) * math.cos(pitch / 2) * math.sin(yaw / 2)
+    qz = math.cos(roll / 2) * math.cos(pitch / 2) * math.sin(yaw / 2) - \
+        math.sin(roll / 2) * math.sin(pitch / 2) * math.cos(yaw / 2)
+    qw = math.cos(roll / 2) * math.cos(pitch / 2) * math.cos(yaw / 2) + \
+        math.sin(roll / 2) * math.sin(pitch / 2) * math.sin(yaw / 2)
+    return (qx, qy, qz, qw)
+
 # endregion DataTransformation
 
 # region MapPreparation
@@ -295,41 +311,32 @@ def set_initial_pose(self, odom_x, odom_y, odom_z, odom_or_x, odom_or_y, odom_or
 def pure_pursuit(current_x, current_y, current_heading, path, index):
     closest_point = None
     v = param_speed
-
-    # Find the next point on the path that is at least the lookahead distance away
     for i in range(index, len(path.poses)):
         x = path.poses[i].pose.position.x
         y = path.poses[i].pose.position.y
         distance = math.hypot(current_x - x, current_y - y)
-        if distance > param_lookahead_distance:
+        if param_lookahead_distance < distance:
             closest_point = (x, y)
             index = i
             break
-
     if closest_point is not None:
         target_heading = math.atan2(
             closest_point[1] - current_y, closest_point[0] - current_x)
+        desired_steering_angle = target_heading - current_heading
     else:
-        # If no point is found, use the last target on the path
         target_heading = math.atan2(
             path.poses[-1].pose.position.y - current_y, path.poses[-1].pose.position.x - current_x)
-        index = len(path.poses) - 1
-
-    # Calculate the desired steering angle
-    desired_steering_angle = target_heading - current_heading
-
-    # Normalize the steering angle to the range [-pi, pi]
-    desired_steering_angle = (
-        desired_steering_angle + math.pi) % (2 * math.pi) - math.pi
-
-    # Limit the steering angle smoothly
-    max_steering_angle = math.pi / 4  # 45 degrees
-    if abs(desired_steering_angle) > max_steering_angle:
-        desired_steering_angle = max_steering_angle * \
-            (desired_steering_angle / abs(desired_steering_angle))
+        desired_steering_angle = target_heading - current_heading
+        index = len(path.poses)-1
+    if desired_steering_angle > math.pi:
+        desired_steering_angle -= 2 * math.pi
+    elif desired_steering_angle < -math.pi:
+        desired_steering_angle += 2 * math.pi
+    if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
+        sign = 1 if desired_steering_angle > 0 else -1
+        desired_steering_angle = sign * math.pi/4
         v = 0.0
-
-    return v, desired_steering_angle, index
+    return v, desired_steering_angle, index, target_heading
 
 
 def prepare_obstacle_handling(self):
@@ -367,6 +374,28 @@ def move_backwards(self, distance, speed):
     prepare_obstacle_handling(self)
 
 
+def rotate(self, target_orientation):
+    prepare_obstacle_handling(self)
+
+    angular_speed = 0.2
+    while True:
+        error = target_orientation - self.odom_yaw
+        # Fehler in den Bereich [-pi, pi] normalisieren
+        error = math.atan2(math.sin(error), math.cos(error))
+
+        if abs(error) < 0.01:  # Toleranzschwelle für das Erreichen des Zielwinkels
+            break
+
+        direction = 1 if error > 0 else -1
+        z = direction * angular_speed
+        publish_cmd_vel(self, 0.0, z)
+
+        # Spin einmal, um die aktuelle Orientierung zu aktualisieren
+        # rclpy.spin_once(self)
+
+    prepare_obstacle_handling(self)
+
+
 def handle_obstacles(self, w):
     obstacle_detected = False
     # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area.
@@ -375,11 +404,7 @@ def handle_obstacles(self, w):
     if self.scan_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle in front detected, turn around.")
         move_backwards(self, 0.1, 0.05)
-        # turn more than 90 Degree
-        self.nav.spin(spin_dist=w, time_allowance=10)
-        while not self.nav.isTaskComplete():
-            print("Turn around")
-            time.sleep(0.1)
+        rotate(self, w)
         print("Turned around.")
         obstacle_detected = True
     return obstacle_detected
@@ -389,10 +414,10 @@ def handle_obstacles(self, w):
 # region RosDebuggingTopics
 
 
-def publish_cmd_vel(self, v, w):
+def publish_cmd_vel(self, v, z):
     twist = Twist()
     twist.linear.x = v
-    twist.angular.z = w
+    twist.angular.z = z
 
     self.publisher.publish(twist)
 
@@ -451,6 +476,21 @@ def publish_centroid_point(self, middle):
     point.point.z = 0.0
     self.publisher_centroid.publish(point)
 
+
+def publish_orientation(self, orientation_yaw):
+    pose = PoseStamped()
+    pose.header.stamp = self.get_clock().now().to_msg()
+    pose.header.frame_id = 'map'
+    quaternion = euler_to_quaternion(0, 0, orientation_yaw)
+    pose.pose.position.x = self.odom_x
+    pose.pose.position.y = self.odom_y
+    pose.pose.position.z = self.odom_z
+    pose.pose.orientation.x = quaternion[0]
+    pose.pose.orientation.y = quaternion[1]
+    pose.pose.orientation.z = quaternion[2]
+    pose.pose.orientation.w = quaternion[3]
+    self.orientation_publisher_.publish(pose)
+
 # endregion RosDebuggingTopics
 
 
@@ -477,6 +517,8 @@ class explorationControl(Node):
         self.publisher_path = self.create_publisher(Path, '/path_topic', 10)
         self.publisher_centroid = self.create_publisher(
             PointStamped, '/centroid_topic', 10)
+        self.orientation_publisher_ = self.create_publisher(
+            PoseStamped, 'turtlebot_orientation', 10)
 
         self.nav = None
 
@@ -572,10 +614,16 @@ class explorationControl(Node):
                 running_state = 4
             # Navigate to target
             elif running_state == 4:
-                v, w, self.i = pure_pursuit(
+                v, w, self.i, target_heading = pure_pursuit(
                     self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
 
-                obstacle_detected = handle_obstacles(self, w)
+                _, _, _, target_heading = pure_pursuit(
+                    self.odom_x, self.odom_y, self.odom_yaw, path, self.i + 5)
+
+                # debug proposal
+                publish_orientation(self, target_heading)
+
+                obstacle_detected = handle_obstacles(self, target_heading)
                 distance_to_target_x = abs(
                     self.odom_x - path.poses[-1].pose.position.x)
                 distance_to_target_y = abs(

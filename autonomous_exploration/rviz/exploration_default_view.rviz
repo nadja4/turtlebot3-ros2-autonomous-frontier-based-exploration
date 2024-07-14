@@ -234,6 +234,24 @@ Visualization Manager:
         Value: /point_topic
       Value: true
     - Alpha: 1
+      Class: rviz_default_plugins/Pose
+      Color: 28; 0; 60
+      Enabled: true
+      History Length: 1
+      Name: TurtlebotTargetOrientation
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /turtlebot_orientation
+      Shaft Length: 0.3
+      Shaft Radius: 0.05
+      Head Length: 0.3
+      Head Radius: 0.1
+      Shape: Arrow
+    - Alpha: 1
       Class: rviz_default_plugins/PointStamped
       Color: 28; 0; 60
       Enabled: true
