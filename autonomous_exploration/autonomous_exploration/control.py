@@ -308,14 +308,14 @@ def set_initial_pose(self, odom_x, odom_y, odom_z, odom_or_x, odom_or_y, odom_or
 
 # Calculate the steering angle required to follow the path
 
-def pure_pursuit(current_x, current_y, current_heading, path, index):
+def pure_pursuit(current_x, current_y, current_heading, path, index, lookahead_distance=param_lookahead_distance):
     closest_point = None
     v = param_speed
     for i in range(index, len(path.poses)):
         x = path.poses[i].pose.position.x
         y = path.poses[i].pose.position.y
         distance = math.hypot(current_x - x, current_y - y)
-        if param_lookahead_distance < distance:
+        if distance > lookahead_distance:
             closest_point = (x, y)
             index = i
             break
@@ -374,12 +374,16 @@ def move_backwards(self, distance, speed):
     prepare_obstacle_handling(self)
 
 
-def rotate(self, target_orientation):
+def rotate(self, target_orientation_deg):
     prepare_obstacle_handling(self)
 
-    angular_speed = 0.2
+    # Zielorientierung in rad relativ zur aktuellen Orientierung
+    target_orientation_rad = math.radians(target_orientation_deg)
+    target_yaw = self.odom_yaw + target_orientation_rad
+
+    angular_speed = 0.75
     while True:
-        error = target_orientation - self.odom_yaw
+        error = target_yaw - self.odom_yaw
         # Fehler in den Bereich [-pi, pi] normalisieren
         error = math.atan2(math.sin(error), math.cos(error))
 
@@ -396,7 +400,7 @@ def rotate(self, target_orientation):
     prepare_obstacle_handling(self)
 
 
-def handle_obstacles(self, w):
+def handle_obstacles(self):
     obstacle_detected = False
     # If the robot detects an obstacle in its path, it reverses and changes its orientation until it is out of the obstacle's area.
     # To ensure that a new path can be planned after the robot has moved out of the obstacle area,
@@ -404,7 +408,8 @@ def handle_obstacles(self, w):
     if self.scan_forward_distance < param_min_distance_to_obstacles:
         print("Obstacle in front detected, turn around.")
         move_backwards(self, 0.1, 0.05)
-        rotate(self, w)
+
+        rotate(self, 90)
         print("Turned around.")
         obstacle_detected = True
     return obstacle_detected
@@ -608,7 +613,7 @@ class explorationControl(Node):
                 publish_path(self, path)
 
                 # Debugging proposes
-                time.sleep(2)
+                time.sleep(1)
 
                 self.i = 0
                 running_state = 4
@@ -617,13 +622,7 @@ class explorationControl(Node):
                 v, w, self.i, target_heading = pure_pursuit(
                     self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
 
-                _, _, _, target_heading = pure_pursuit(
-                    self.odom_x, self.odom_y, self.odom_yaw, path, self.i + 5)
-
-                # debug proposal
-                publish_orientation(self, target_heading)
-
-                obstacle_detected = handle_obstacles(self, target_heading)
+                obstacle_detected = handle_obstacles(self)
                 distance_to_target_x = abs(
                     self.odom_x - path.poses[-1].pose.position.x)
                 distance_to_target_y = abs(
