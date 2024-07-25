@@ -308,7 +308,7 @@ def set_initial_pose(self, odom_x, odom_y, odom_z, odom_or_x, odom_or_y, odom_or
 
 # Calculate the steering angle required to follow the path
 
-def pure_pursuit(current_x, current_y, current_heading, path, index, lookahead_distance=param_lookahead_distance):
+def pure_pursuit(self, current_x, current_y, current_heading, path, index, lookahead_distance=param_lookahead_distance):
     closest_point = None
     v = param_speed
     for i in range(index, len(path.poses)):
@@ -320,6 +320,9 @@ def pure_pursuit(current_x, current_y, current_heading, path, index, lookahead_d
             index = i
             break
     if closest_point is not None:
+        publish_centroid_point(self, closest_point)
+        # publish_centroid_point(self, (current_x, current_y))
+
         target_heading = math.atan2(
             closest_point[1] - current_y, closest_point[0] - current_x)
         desired_steering_angle = target_heading - current_heading
@@ -619,8 +622,8 @@ class explorationControl(Node):
                 running_state = 4
             # Navigate to target
             elif running_state == 4:
-                v, w, self.i, target_heading = pure_pursuit(
-                    self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
+                v, w, self.i, target_heading = pure_pursuit(self,
+                                                            self.odom_x, self.odom_y, self.odom_yaw, path, self.i)
 
                 obstacle_detected = handle_obstacles(self)
                 distance_to_target_x = abs(
