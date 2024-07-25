@@ -243,8 +243,6 @@ def find_closest_group(self, matrix, groups, resolution, originX, originY, odomX
 
         publish_middle_x = middle[1]*resolution+originX
         publish_middle_y = middle[0]*resolution+originY
-        # For debugging
-        # publish_centroid_point(self, (publish_middle_x, publish_middle_y))
 
         # Calculate path to centroid/middle of the group
         path, goal_pose = get_nav_path(self.nav, (odomX, odomY, odomZ, odom_or_x, odom_or_y, odom_or_z, odom_or_w),
@@ -320,8 +318,8 @@ def pure_pursuit(self, current_x, current_y, current_heading, path, index, looka
             index = i
             break
     if closest_point is not None:
-        publish_centroid_point(self, closest_point)
-        # publish_centroid_point(self, (current_x, current_y))
+        publish_closest_point(self, closest_point)
+        # publish_closest_point(self, (current_x, current_y))
 
         target_heading = math.atan2(
             closest_point[1] - current_y, closest_point[0] - current_x)
@@ -412,7 +410,7 @@ def handle_obstacles(self):
         print("Obstacle in front detected, turn around.")
         move_backwards(self, 0.1, 0.05)
 
-        rotate(self, 90)
+        rotate(self, 90 * random.randint(1, 3))
         print("Turned around.")
         obstacle_detected = True
     return obstacle_detected
@@ -472,17 +470,17 @@ def publish_target_point(self, target_point):
     point.point.x = target_point.pose.position.x
     point.point.y = target_point.pose.position.y
     point.point.z = 0.0
-    self.publisher_point.publish(point)
+    self.publisher_target_point.publish(point)
 
 
-def publish_centroid_point(self, middle):
+def publish_closest_point(self, middle):
     point = PointStamped()
     point.header.stamp = self.get_clock().now().to_msg()
     point.header.frame_id = "map"
     point.point.x = middle[0]
     point.point.y = middle[1]
     point.point.z = 0.0
-    self.publisher_centroid.publish(point)
+    self.publisher_closest_point.publish(point)
 
 
 def publish_orientation(self, orientation_yaw):
@@ -518,13 +516,13 @@ class explorationControl(Node):
         self.subscription = self.create_subscription(
             LaserScan, 'scan', self.scan_callback, qos_profile_sensor_data)
         self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.publisher_point = self.create_publisher(
-            PointStamped, '/point_topic', 10)
+        self.publisher_target_point = self.create_publisher(
+            PointStamped, '/target_point_topic', 10)
         self.publisher_map = self.create_publisher(
             OccupancyGrid, '/group_map_topic', 10)
         self.publisher_path = self.create_publisher(Path, '/path_topic', 10)
-        self.publisher_centroid = self.create_publisher(
-            PointStamped, '/centroid_topic', 10)
+        self.publisher_closest_point = self.create_publisher(
+            PointStamped, '/closest_point_topic', 10)
         self.orientation_publisher_ = self.create_publisher(
             PoseStamped, 'turtlebot_orientation', 10)
 
