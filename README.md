@@ -97,3 +97,23 @@ ros2 run autonomous_exploration control --ros-args --log-level <log-level> (e.g.
 - [ROS2 - Humble](https://docs.ros.org/en/humble/Installation.html)
 - [Slam Toolbox](https://github.com/SteveMacenski/slam_toolbox/blob/ros2/launch/online_async_launch.py)
 - [Turtlebot3 Package](https://emanual.robotis.com/docs/en/platform/turtlebot3/quick-start/)
+
+## Troubleshooting
+
+# Error: /usr/lib/python3/dist-packages/setuptools/command/easy_install.py:158: EasyInstallDeprecationWarning: easy_install command is deprecated. Use build and pip and other standards-based tools. 
+
+Solution:
+```
+pip install setuptools==58.2.0
+```
+also see: https://answers.ros.org/question/396439/setuptoolsdeprecationwarning-setuppy-install-is-deprecated-use-build-and-pip-and-other-standards-based-tools/  
+
+# Error: Navigation2 does not load the map
+[component_container_isolated-1] [ERROR] [1719472866.953168558] [amcl]: Original error: According to the loaded plugin descriptions the class nav2_amcl::MotionModel with base class type nav2_amcl::MotionModel does not exist. Declared types are  nav2_amcl::DifferentialMotionModel nav2_amcl::OmniMotionModel 
+
+Solution:
+Install packages manually as mentioned above
+
+# Error: No connection to TurtleBot3 
+Solution: 
+If you use a virtual environment, make sure you have activated a network bridge. 
